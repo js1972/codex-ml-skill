@@ -1,0 +1,4 @@
+.venv/
+artefacts/
+results.md
+__pycache__/
