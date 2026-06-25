@@ -45,11 +45,30 @@ Also write `results.md` in the project root with a concise final summary.
       "accuracy": 0.75
     }
   },
+  "signal_check": {
+    "ran": true,
+    "permutations": 5,
+    "real_baseline_score": 0.72,
+    "shuffled_mean": 0.49,
+    "shuffled_std": 0.02,
+    "signal_detected": true,
+    "user_overrode_no_signal": false
+  },
+  "stacking": {
+    "attempted": true,
+    "base_learners": ["LightGBM", "XGBoost", "RandomForest"],
+    "meta_learner": "LogisticRegression",
+    "best_single_score": 0.79,
+    "ensemble_score": 0.81,
+    "adopted": true,
+    "reason": "ensemble beat best single by 2.5%"
+  },
   "final": {
-    "score": 0.79,
+    "score": 0.81,
     "eval_set": "holdout_test",
+    "model": "stacking_ensemble",
     "details": {
-      "accuracy": 0.81
+      "accuracy": 0.83
     }
   }
 }
@@ -123,6 +142,18 @@ Also write `results.md` in the project root with a concise final summary.
   },
   "explainability": {
     "requested": false
+  },
+  "signal_check": {
+    "enabled": true,
+    "permutations": 5,
+    "threshold_stds": 2
+  },
+  "stacking": {
+    "enabled": true,
+    "min_families": 3,
+    "max_base_learners": 5,
+    "family_score_window": 0.1,
+    "acceptance_relative_gain": 0.005
   }
 }
 ```
@@ -144,10 +175,19 @@ Also write `results.md` in the project root with a concise final summary.
 - Transforms applied in pipeline: [e.g., log1p on amount]
 - Outlier handling: [e.g., capped at 1st/99th percentile for column X]
 
+## Signal check
+- Real baseline: 0.72 (validation)
+- Shuffled-label baselines: 0.49 ± 0.02 (5 permutations)
+- Verdict: signal detected — proceeded to iteration
+- What this means: the model is clearly learning something real from the
+  features, not just memorising noise.
+
 ## Best model
-- Model: RandomForestClassifier
+- Model: stacking ensemble of LightGBM + XGBoost + RandomForest
+- Meta-learner: LogisticRegression
 - Metric: AUC = 0.91 (holdout test set)
-- Baseline AUC: 0.83 (validation set)
+- Best single model (LightGBM): AUC = 0.89 (validation)
+- Baseline AUC: 0.83 (validation)
 - What AUC means: probability the model ranks a positive example above a
   negative one; higher is better.
 
@@ -157,6 +197,7 @@ Also write `results.md` in the project root with a concise final summary.
 - Feature engineering: date parts (month, day_of_week), lag(1, 7), rolling mean
 - Optimizer: Optuna TPESampler, seed 42
 - Trials run: 87 (converged — 25 non-improving trials with < 0.1% gain)
+- Stacking: 3 base learners selected, ensemble beat best single by 2.2% → adopted
 - Seed: 42
 
 ## Inference
@@ -168,4 +209,33 @@ Also write `results.md` in the project root with a concise final summary.
 - artefacts/infer.py
 - artefacts/metrics.json
 - artefacts/config.json
+```
+
+## No-signal results.md variant
+
+If the signal check fails and the user opts to halt, the `results.md` should
+clearly state that no model was produced. Example:
+
+```markdown
+# Model Results — No Signal Detected
+
+## Verdict
+This dataset does not contain enough signal to predict the target reliably.
+
+## Signal check
+- Real baseline: 0.51 (validation)
+- Shuffled-label baselines: 0.49 ± 0.02 (5 permutations)
+- The real baseline is within 2 standard deviations of random — the features
+  cannot reliably distinguish real labels from shuffled ones.
+
+## What to try instead
+- Collect more or different features for each row.
+- Reconsider how the target is defined or derived.
+- If most of the signal might live in free text, consider an LLM-based approach.
+- Confirm there are no upstream data issues (wrong join key, stale labels).
+
+## Artifacts
+- artefacts/metrics.json (includes the signal-check result)
+- artefacts/config.json
+- No model was saved.
 ```

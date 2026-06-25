@@ -2,3 +2,4 @@
 artefacts/
 results.md
 __pycache__/
+.DS_Store

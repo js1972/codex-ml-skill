@@ -18,8 +18,12 @@ convergence-based stopping, and save code and artifacts under `artefacts/`.
 3. Load and validate dataset.
 4. Profile dataset and resolve data quality issues with user confirmation.
 5. Split into train/validation/holdout sets and train baseline model.
-6. Iterate with Optuna/TPESampler until convergence.
-7. Evaluate final model on holdout test set and save artifacts.
+6. Run a signal check: compare baseline against a label-shuffled baseline.
+   If no detectable signal, halt and recommend alternatives.
+7. Iterate with Optuna/TPESampler until convergence.
+8. Build a stacking ensemble from the top diverse trial models
+   (classification and regression only).
+9. Evaluate final model on holdout test set and save artifacts.
 
 ## 0) Environment setup (required)
 
@@ -175,6 +179,56 @@ without explaining them. Example format:
 - Use default models and metrics if the user did not specify them (see
   `references/defaults.md`).
 
+## 3.5) Signal check (required before iteration)
+
+After the baseline trains, verify that the features actually contain predictive
+signal before spending compute on hyperparameter search. This prevents the skill
+from confidently producing a polished model on a dataset that has nothing to
+learn from.
+
+**How to run it**
+
+- Permute the target column 5 times using different seeds derived from the
+  agreed random seed (e.g. `random_seed + i`).
+- For each permutation, train the same baseline pipeline on the (shuffled-label)
+  training fold and score it on the validation set.
+- Compute the mean and standard deviation of the 5 shuffled scores.
+- Compare the real baseline score to the shuffled distribution.
+
+**Decision rule**
+
+- Higher-is-better metrics (f1, auc, r2, accuracy):
+  - Real baseline ≤ shuffled mean + 2·shuffled std → **no detectable signal**
+  - Otherwise → signal present, proceed to iteration
+- Lower-is-better metrics (rmse, mae, mape):
+  - Real baseline ≥ shuffled mean − 2·shuffled std → **no detectable signal**
+  - Otherwise → signal present, proceed to iteration
+
+**Skip when**
+
+- Unsupervised anomaly detection (no labels to shuffle).
+- Time series forecasting where shuffling destroys the temporal structure —
+  use a naive-forecast baseline (last-value or seasonal naive) as the
+  signal floor instead, and only proceed if the real baseline beats it.
+
+**If no signal is detected**
+
+- Halt iteration. Do **not** run Optuna.
+- Report the finding in plain language. Example:
+  > "I ran 5 sanity checks where the answers were randomly shuffled. Our
+  > baseline scored 0.51 on the real data and 0.49 ± 0.02 on shuffled data.
+  > This means the model can barely tell the real labels apart from random
+  > ones — the features in this dataset don't contain enough information to
+  > predict the target. Continuing would produce a model that looks plausible
+  > but isn't actually useful."
+- Suggest alternatives: collect more or different features, reframe the target,
+  consider an LLM-based approach if the signal might be in free text, or
+  confirm the target derivation is correct.
+- Ask the user whether to (a) stop here, or (b) proceed with Optuna anyway
+  knowing the result is unlikely to be useful.
+- Record the signal-check result in `artefacts/metrics.json` regardless of
+  the user's choice.
+
 ## 4) Iteration
 
 - Use **Optuna with TPESampler** as the hyperparameter optimizer. Install into
@@ -200,6 +254,48 @@ without explaining them. Example format:
   on a fixed time limit.
 - Log progress every 10 trials: trial number, best score so far, current score.
 - Keep a clear audit trail in `artefacts/config.json`.
+
+## 4.5) Stacking ensemble (classification and regression only)
+
+After Optuna converges, build a stacking ensemble from the top diverse trial
+models. On tabular problems this typically adds 1–3% on the chosen metric over
+the single best model, and rarely loses.
+
+**When to skip**
+
+- Time-series forecasting (stacking interacts badly with temporal CV; keep
+  the single best model).
+- Anomaly detection (no clean way to stack scores across heterogeneous methods).
+- Fewer than 3 distinct model families converged with reasonable scores —
+  stacking 3 copies of the same model family adds nothing.
+- User opts out, or compute budget is exhausted.
+
+**How to build it**
+
+- Select the top model from each distinct model family that finished within
+  10% of the best validation score (e.g. LightGBM best + XGBoost best +
+  RandomForest best). Cap at 5 base learners.
+- Generate out-of-fold predictions for each base learner using 5-fold CV on
+  the training fold only (or 5 walk-forward folds for time-aware data).
+- Train a simple meta-learner on the stacked out-of-fold predictions:
+  - Classification: `LogisticRegression` with `class_weight='balanced'`
+  - Regression: `Ridge`
+- Fit each base learner on the full training fold (no CV) for the final
+  pipeline. The meta-learner uses their predictions on validation/holdout.
+- All preprocessing for each base learner stays inside its own pipeline —
+  fit on training fold only.
+
+**Acceptance rule**
+
+- Score the stacked ensemble on the validation set.
+- Adopt the ensemble only if it beats the single best model by ≥ 0.5%
+  relative on the chosen metric. Otherwise keep the single best model and
+  record that stacking was tried but rejected.
+
+**Record in `artefacts/config.json` and `metrics.json`**
+
+- Whether stacking was attempted, the base learners selected, the meta-learner,
+  the ensemble validation score, and the adoption decision.
 
 ## 5) Outputs
 

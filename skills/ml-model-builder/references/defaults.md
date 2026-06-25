@@ -193,3 +193,41 @@ Do not recommend LLMs for:
 - For anomaly detection with a provided contamination rate, pass it to the
   unsupervised model when no labels exist.
 - For time-based splits, use the provided time column and avoid shuffling.
+
+## Signal Check Defaults
+
+Before running Optuna, verify the dataset actually contains predictive signal
+by comparing the real baseline to baselines trained on label-shuffled data.
+
+- Permutations: 5 shuffles, seeded as `random_seed + i` for i in 0..4
+- Decision threshold: signal is "not detectable" if the real baseline score
+  is within 2 standard deviations of the shuffled mean (higher-is-better: real
+  ≤ mean + 2·std → no signal; lower-is-better: real ≥ mean − 2·std → no signal).
+- Skip for:
+  - Unsupervised anomaly detection (no labels to shuffle).
+  - Time-series forecasting (shuffling destroys temporal structure) — instead
+    require the real baseline to beat a naive forecast (last-value or seasonal
+    naive) by a non-trivial margin.
+- On "no signal": halt iteration by default. Ask whether to (a) stop, or
+  (b) proceed anyway. Always record the result in `metrics.json`.
+
+## Stacking Defaults (Classification and Regression)
+
+After Optuna converges, attempt a stacking ensemble of the top diverse trial
+models.
+
+- Eligible tasks: classification, regression. Skip for time series and anomaly
+  detection.
+- Base learner selection: top model per distinct family (e.g. LightGBM, XGBoost,
+  CatBoost, RandomForest, HistGradientBoosting) whose validation score is within
+  10% of the overall best. Cap at 5 base learners. Require at least 3 distinct
+  families to attempt stacking.
+- Out-of-fold predictions: 5-fold CV on the training fold only; preprocessing
+  re-fit inside each fold.
+- Meta-learner:
+  - Classification: `LogisticRegression(class_weight='balanced')`
+  - Regression: `Ridge`
+- Acceptance: adopt the ensemble only if it beats the single best model by
+  ≥ 0.5% relative on the chosen metric. Otherwise keep the single best model.
+- Record attempt, base learners, meta-learner, ensemble score, and adoption
+  decision in `metrics.json` and `config.json`.
