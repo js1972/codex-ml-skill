@@ -87,6 +87,91 @@ These headers go to normal terminal output — not inside a tool call, not in
 a code block. They give the user a heartbeat they can scan even if the
 todo list is hidden.
 
+## Spec discipline (read before any step)
+
+Your job on every decision in this skill is **either to follow the spec or
+to propose a deviation to the user and wait for approval** — never to deviate
+silently. Each decision in the steps below is tagged with one of three
+categories. **The tag determines what you are allowed to do**:
+
+### `[ASK]` — pause and ask the user, every time
+
+The user makes the call. You explain the situation in plain language, state
+your recommendation if you have one, and **wait for a Y/N (or specific
+choice) response before proceeding**.
+
+You must NOT:
+- Apply the recommended default silently and report what you did.
+- Batch multiple `[ASK]` items into a single "defaults I'll apply unless you
+  object" block. Each `[ASK]` item gets its own prompt and its own answer.
+- Treat "default: yes" wording as permission to skip the question. The default
+  is what you **recommend**, not what you apply unilaterally.
+
+### `[DEFAULT]` — apply the documented value silently if the user didn't specify
+
+These are inexpensive, easily-reversed, low-impact choices (random seed,
+metric default when unspecified, file naming). You may apply the documented
+value without asking. You may mention it in a brief defaults summary. No
+confirmation needed.
+
+### `[SPEC]` — use the documented value unless the data warrants a deviation
+
+These are documented parameters (timeouts, split ratios, baseline algorithm,
+convergence rules) chosen because they are sensible defaults across most
+datasets.
+
+**Default behaviour: use the exact documented value.**
+
+**Permitted exception: dataset-grounded deviation, proposed to the user.**
+If the EDA you just performed reveals a **specific concrete property of this
+dataset** (size, imbalance, distribution, structure, leakage signal) that
+makes the documented value clearly suboptimal, you may **propose** a
+deviation to the user. The proposal must include:
+- The exact property of this dataset that triggered the proposal
+- The documented value and the proposed alternative
+- The trade-off in one sentence
+- A Y/N choice between spec and proposal
+
+You must wait for the user's response. You must NOT deviate silently — even
+a well-reasoned deviation applied without asking is a defect.
+
+You must NOT propose a deviation based on **general preferences** ("X usually
+works better than Y on tabular data"). Those generic preferences are already
+encoded in the spec; the spec is what we want by default. A proposal is only
+valid when grounded in this dataset's specific profile.
+
+### Examples — the right shape of behaviour
+
+**Right (`[ASK]`):**
+> "I found 1,177 exact duplicate rows (18% of the dataset). Duplicates can
+> unfairly skew training. I recommend dropping them. OK? [Y/n]"
+
+**Wrong (`[ASK]` applied as default):**
+> "I'll apply these defaults unless you object: drop 1,177 duplicates, apply
+> log1p to 6 skewed columns, cap outliers in 3 columns, ..."
+
+**Right (`[SPEC]` with dataset-grounded proposal):**
+> "The skill default split is 80/10/10. This dataset has 5,320 rows with only
+> 19% positive class (~1,011 positive examples). 80/10/10 leaves ~101
+> positives in the holdout, which gives noisy AUC estimates (95% CI ≈ ±0.04).
+> I'd suggest 70/15/15 to halve that noise, at the cost of ~530 fewer
+> training rows. Stick with 80/10/10 (spec), or use 70/15/15? [80/70]"
+
+**Wrong (`[SPEC]` deviation, silent):**
+> "Split: 70/15/15."
+
+**Wrong (`[SPEC]` deviation, generic justification):**
+> "I'll use 70/15/15 because gradient-boosted trees usually prefer larger
+> validation sets."  *(Generic preference, not dataset-grounded.)*
+
+### One rule above all
+
+**"Improving" on the spec without telling the user is a defect, not a
+courtesy.** A spec deviation applied silently — even one that produces a
+better model — is wrong, because it removes the user's ability to know what
+trade-offs the skill made on their behalf. Transparency is what makes this
+skill distinct from a black-box AutoML system; silent deviations erode it.
+
 ## 0) Environment setup (required)
 
 - Before running any Python code or installing dependencies, create a venv in
@@ -100,33 +185,48 @@ todo list is hidden.
 
 ## 1) Intake and clarification
 
-- Ask the minimum required inputs before training:
+- Ask the minimum required inputs before training (each item is `[ASK]`):
   - dataset location(s) (local path(s) or URL(s))
   - task type
-  - evaluation metric (or accept default)
-  - split strategy
-- Ask for time column and any entity/group identifier to choose an appropriate
-  split and CV strategy (see `references/defaults.md`).
-- Ask for a random seed (default in `references/defaults.md`).
-- Ask task-specific requirements (see `references/defaults.md`).
-- Ask for any domain-specific feature ideas and confirm whether to apply
-  standard feature engineering (date parts, lags, transforms).
-- Ask whether to run explainability (SHAP) and whether to change training bounds.
-- Ask whether to run an **AutoGluon comparison** alongside the main pipeline.
-  Phrase the question in plain language and default to **No**:
+  - evaluation metric (or accept default — `[DEFAULT]` if user doesn't specify)
+  - split strategy (or accept default — `[SPEC]`, see §3)
+- `[ASK]` — Ask for time column and any entity/group identifier to choose an
+  appropriate split and CV strategy (see `references/defaults.md`).
+- `[DEFAULT]` — Random seed: use 42 unless the user specifies otherwise.
+- `[ASK]` — Task-specific requirements (see `references/defaults.md`).
+- `[ASK]` — Domain-specific feature ideas; confirm whether to apply standard
+  feature engineering (date parts, lags, transforms).
+- `[ASK]` — Whether to run explainability (SHAP). Discrete question.
+- `[ASK]` — **Time budget for hyperparameter search.** Phrase as a discrete
+  question with the spec default presented:
+  > "The default is to let Optuna run until convergence (25 non-improving
+  > trials with <0.1% relative gain) with an 8-hour failsafe. Would you like
+  > to set a shorter time budget? Press Enter to keep the default, or enter
+  > minutes (e.g. 30)."
+  Record the chosen value in `config.json` under `bounds.main_minutes` or
+  leave the 8-hour failsafe. Do not invent a shorter timeout on your own.
+- `[ASK]` — **Time budget for stacking ensemble.** Same pattern:
+  > "The default is no time limit for stacking. Would you like to set one?
+  > Press Enter to keep the default, or enter minutes."
+  Record under `bounds.stacking_minutes` if set; otherwise leave unlimited.
+- `[ASK]` — Whether to run an **AutoGluon comparison** alongside the main
+  pipeline. **This MUST be a discrete question; do NOT batch it into a
+  "defaults" list.** Phrase in plain language and default to **No**:
   > "Would you like me to also run AutoGluon (an AutoML system) for a
   > head-to-head comparison against the transparent pipeline? It adds
   > ~2 GB of install and 5–15 minutes of extra runtime. This is useful if
   > you want to know whether an off-the-shelf AutoML system would produce
   > a better model on this dataset. [y/N]"
-  Record the user's choice in `artefacts/config.json` under
-  `comparison.autogluon` (bool).
-- If multiple dataset locations are provided, ask how to combine them and
-  whether to add a source column.
+  Wait for a Y/N answer before proceeding to step 2. Record the user's
+  choice in `artefacts/config.json` under `comparison.autogluon` (bool).
+- `[ASK]` — If multiple dataset locations are provided, ask how to combine
+  them and whether to add a source column.
 - Run a quick LLM suitability check (see `references/defaults.md`). If it
-  triggers, recommend an LLM-based approach and ask whether to proceed with
-  classical ML anyway.
-- Confirm defaults when the user does not specify values.
+  triggers, **`[ASK]`** — recommend an LLM-based approach and ask whether to
+  proceed with classical ML anyway.
+- For `[DEFAULT]` items: confirm by stating them briefly in one summary
+  ("I'll use random seed 42, metric f1_macro since you didn't specify").
+  Do not include `[ASK]` items in this summary.
 
 ## 2) Dataset handling
 
@@ -145,6 +245,12 @@ Run this analysis after loading the dataset and before any splitting or
 training. The goal is to configure the training run correctly, not just report
 findings.
 
+**Every decision in this section is `[ASK]`.** Each finding gets its own
+plain-language question and waits for the user's response. The "default: yes"
+or "default: cap" wording below is what to **recommend** to the user — not
+what to apply unilaterally. Do NOT batch these decisions into a "defaults
+I'll apply unless you object" block.
+
 **Communication rule for all confirmations:** Always explain in plain,
 jargon-free language — what was found, why it matters in one sentence, and a
 clear recommendation. State the default. Never present raw statistical terms
@@ -153,86 +259,92 @@ without explaining them. Example format:
 > Columns like this can't help the model learn anything and slow down training.
 > I recommend removing them. OK to drop them? [Y/n]"
 
-**Shape and duplicates**
+**Shape and duplicates** `[ASK]`
 - Report row/column count.
 - Detect duplicate rows; if found: explain that identical rows can unfairly
-  skew the model's learning, recommend dropping, confirm before doing so
-  (default: yes).
+  skew the model's learning, recommend dropping, **ask the user before doing
+  so** (default recommendation: yes).
 
-**Missing values**
+**Missing values** `[ASK]`
 - Report missingness per column (count + %).
 - Columns > 50% missing: explain that more than half the data is absent so
-  filling it in would mean mostly guessing; ask whether to drop the column or
-  fill it anyway (default: drop).
+  filling it in would mean mostly guessing; **ask** whether to drop the column
+  or fill it anyway (default recommendation: drop).
 - Columns 20–50% missing: record for median/mode imputation inside the training
   pipeline — do NOT fill now, before splitting, as that would let test data
   influence training.
 - Record final imputation strategy per column in `artefacts/config.json`.
 
-**Near-zero variance**
+**Near-zero variance** `[ASK]`
 - Flag columns where > 95% of values are identical.
 - Explain that a column with almost no variety cannot teach the model anything;
-  recommend dropping; confirm before doing so (default: yes).
+  recommend dropping; **ask the user before doing so** (default
+  recommendation: yes).
 - Record dropped columns in `artefacts/config.json`.
 
-**Highly correlated features**
+**Highly correlated features** `[ASK]`
 - Flag numeric column pairs with |r| > 0.95.
 - Explain in plain terms: "These two columns contain almost identical
   information. Keeping both is redundant and can confuse the model. I recommend
   keeping [X] and removing [Y] because X has a stronger relationship with what
   we're trying to predict. (this is called multicollinearity)"
-- Confirm before dropping (default: yes); record in `artefacts/config.json`.
+- **Ask the user before dropping** (default recommendation: yes); record in
+  `artefacts/config.json`.
 
-**Numeric skew**
+**Numeric skew** `[ASK]`
 - Flag columns with |skew| > 1.0.
 - Explain: "This column has a few very large values that could pull the model
   in the wrong direction. I'll apply a standard adjustment to balance it out
-  (log transformation)." Record which columns need log1p transforms in
-  `artefacts/config.json` — but do NOT apply them yet. Transforms are applied
+  (log transformation)." **Ask the user before recording** which columns get
+  log1p transforms in `artefacts/config.json`. Transforms are applied
   only inside the training pipeline after splitting, to avoid test data
   influencing training.
-- Record transforms in `artefacts/config.json`.
+- Record approved transforms in `artefacts/config.json`.
 
-**Outliers**
+**Outliers** `[ASK]`
 - Flag columns with rows beyond 3 IQRs from the median; report count and %.
 - Explain: "X rows in column Y have extreme values that are far outside the
   normal range. These can throw off the model. Options: (1) cap them at a
   sensible limit [recommended] (Winsorization), (2) remove those rows,
   (3) leave them as-is."
-- Confirm choice before acting (default: cap); record decision in
-  `artefacts/config.json`.
+- **Ask the user for a choice** (default recommendation: cap); record decision
+  in `artefacts/config.json`.
 - Capping/removal is applied inside the training pipeline after splitting —
   not on the raw dataset now, to avoid test data influencing training.
 
-**Target leakage signals**
+**Target leakage signals** `[ASK]`
 - Flag features with |correlation to target| > 0.9.
 - Explain: "The column '[name]' is almost perfectly linked to what we're trying
   to predict. This usually means it was calculated using the answer, which would
   make the model look accurate in testing but fail in real use. I recommend
   removing it. (this is called target leakage)"
-- Confirm before dropping (default: yes); record in `artefacts/config.json`.
+- **Ask the user before dropping** (default recommendation: yes); record in
+  `artefacts/config.json`.
 
-**Class imbalance (classification and supervised anomaly detection)**
+**Class imbalance (classification and supervised anomaly detection)** `[ASK]`
 - Report class distribution in plain terms: e.g. "87% of rows are class A,
   13% are class B".
 - If minority class < 20%: explain the imbalance will bias the model toward
-  the majority class; apply `class_weight='balanced'` automatically and note
-  it in the summary.
-- If minority class < 5%: additionally explain the imbalance is severe; ask:
+  the majority class. The `class_weight='balanced'` mitigation is `[DEFAULT]`
+  (apply automatically and note it in the summary).
+- If minority class < 5%: additionally explain the imbalance is severe;
+  **`[ASK]`**:
   "Would you like me to also artificially generate extra examples of the rare
   class to help the model learn it better? (this technique is called SMOTE)
   [Y/n]"
 
-**Temporal integrity (time series only)**
+**Temporal integrity (time series only)** `[ASK]`
 - Check for gaps or irregular frequency in the time column.
 - Report in plain terms: e.g. "The data runs from Jan 2020 to Dec 2023 but
   there are 14 missing weeks."
-- Ask: "Missing time periods can disrupt forecasting. Should I fill them in
-  using the surrounding values, or leave the gaps? [fill in / leave gaps]"
+- **Ask**: "Missing time periods can disrupt forecasting. Should I fill them
+  in using the surrounding values, or leave the gaps? [fill in / leave gaps]"
 
 **Profiling summary**
-- Print a concise plain-language summary of all findings before proceeding.
-- List what was fixed automatically and what decisions the user made.
+- After all `[ASK]` questions have been answered, print a concise
+  plain-language summary of all findings and decisions.
+- List what was decided (dropped, imputed, transformed, capped, etc.) and
+  what the user chose where they overrode the default recommendation.
 - Only proceed to baseline once all confirmations are resolved.
 
 ## 3) Baseline model (fixed by task — do not substitute)
@@ -241,17 +353,23 @@ The baseline is intentionally a **simple, deliberately under-powered model**.
 Its purpose is to give a stable reference point so the rest of the run can
 report meaningful gains. It is **not** "the first reasonable model I tried."
 
-**You MUST use the baseline algorithm specified for the task type in
-`references/defaults.md`.** Substituting a different algorithm — even if you
-believe it would perform better — is a defect, because it makes baselines
-incomparable across runs of the same dataset and inflates or hides the gain
-from iteration.
+**The baseline algorithm is `[SPEC]`.** Use the algorithm specified for the
+task type in `references/defaults.md`. A dataset-grounded deviation
+(e.g. "this dataset has 30,000 categorical levels and LogReg would not fit
+in memory") may be proposed to the user, but **never silently substituted**.
+"RandomForest usually performs better than LogReg" is a generic preference,
+not a dataset-grounded reason, and is not a valid basis for deviation.
 
 The fixed defaults are:
 - Classification: `LogisticRegression` (standardised, one-hot encoded)
 - Regression: `Ridge` (standardised, one-hot encoded)
 - Time series: seasonal naive or last-value
 - Anomaly: `IsolationForest`
+
+**The split ratio is `[SPEC]`.** Use 80/10/10 (stratified for classification,
+chronological for time series). A dataset-grounded deviation may be proposed
+to the user with the trade-off stated (e.g. extreme class imbalance, very
+small dataset). Do not pick a different ratio silently.
 
 Other rules:
 
@@ -266,7 +384,7 @@ Other rules:
 - Report baseline metrics from the validation set and store them in
   `artefacts/metrics.json`, naming the baseline algorithm explicitly under
   `baseline.details.model`.
-- Use the default metric if the user did not specify one (see
+- Use the default metric if the user did not specify one (`[DEFAULT]`, see
   `references/defaults.md`).
 
 ## 3.5) Signal check — REQUIRED before iteration
@@ -347,6 +465,15 @@ Whether signal is detected or not, populate `signal_check` in
 - All preprocessing transforms (imputation, log1p, encoding, scaling) must be
   fit inside each trial's training fold — never fit on the full dataset before
   splitting.
+- **Time budget** `[SPEC]`: pass `timeout=28800` (8 hours) to
+  `study.optimize(...)` unless the user supplied a different value at intake
+  (`config.json.bounds.main_minutes`). **Do NOT invent a shorter timeout on
+  your own** — that is a defect. The convergence rule below is the intended
+  primary stopping mechanism; the 8-hour timeout is a failsafe only.
+- **Convergence rule** `[SPEC]`: stop early when 25 consecutive non-improving
+  trials produce a relative gain of less than 0.1% over those 25 trials.
+  Implement this as an Optuna callback. Do not substitute a shorter
+  non-improving threshold or a higher gain threshold.
 - Include non-sklearn models when appropriate (XGBoost, LightGBM, CatBoost).
   Install into venv if needed.
 - **You MUST include at least one non-tree model family in the iteration
@@ -360,10 +487,10 @@ Whether signal is detected or not, populate `signal_check` in
 - Expand feature engineering if it improves the metric and does not introduce
   leakage.
 - Use the agreed metric to pick the best model.
-- Stop when convergence criteria are met (see `references/defaults.md`) — not
-  on a fixed time limit.
 - Log progress every 10 trials: trial number, best score so far, current score.
-- Keep a clear audit trail in `artefacts/config.json`.
+- Keep a clear audit trail in `artefacts/config.json`. Record the actual
+  timeout used in `config.json.bounds.main_seconds_used` and whether it was
+  the spec default or a user override.
 
 ## 4.5) Stacking ensemble — REQUIRED to attempt for classification and regression
 
@@ -411,13 +538,24 @@ silently omit the key.
   relative on the chosen metric. Otherwise keep the single best model and
   record that stacking was tried but rejected.
 
+**Time budget** `[SPEC]`
+
+- Default: **no time limit** for the stacking step. It runs to completion.
+- If the user supplied a stacking time budget at intake
+  (`config.json.bounds.stacking_minutes`), respect that budget.
+- **Do NOT invent a stacking timeout on your own.** If you believe the
+  stacking step is risky on a particular dataset (e.g. very slow base
+  learners), surface that to the user before starting it — do not silently
+  cap it.
+
 **Always record the result**
 
 Whether adopted or rejected, populate `stacking` in `artefacts/metrics.json`
 with: `attempted` (bool), `base_learners` (list of family names),
 `meta_learner` (string), `best_single_score` (float), `ensemble_score` (float
 or null if skipped), `adopted` (bool), `reason` (string explaining adopt /
-reject / skip).
+reject / skip), `time_limit_seconds_used` (int or null if unlimited),
+`time_limit_source` (one of "spec_unlimited", "user_override").
 
 ## 4.6) Ceiling check — diagnose whether more compute would help
 
@@ -568,12 +706,18 @@ hand off a partial run.
 - [ ] Optuna ran (or was explicitly skipped due to no-signal halt) and the
       trial count plus convergence reason is recorded. The iteration pool
       included **at least one non-tree model family** (LogReg-elasticnet,
-      KNN, GaussianNB, or equivalent).
+      KNN, GaussianNB, or equivalent). The Optuna timeout used matches
+      `config.json.bounds.main_seconds_used` (either the spec default of
+      28800 or the user-supplied override — never a silently-shortened
+      value).
 - [ ] **Stacking** is recorded in `metrics.json` under `stacking`. For
       classification/regression, `attempted` is `true` unless an explicit
       skip condition applied (recorded in `stacking.reason`). For time-series
       and anomaly detection, `attempted` is `false` with the appropriate
-      reason.
+      reason. The stacking timeout used matches
+      `config.json.bounds.stacking_seconds_used` (null = unlimited, the spec
+      default, or the user-supplied override — never a silently-invented
+      timeout).
 - [ ] **Ceiling check** ran and is recorded in `metrics.json` under
       `ceiling_check` (`near_ceiling`, `family_score_spread_pct`,
       `baseline_to_best_gain_pct`, `note`). If `near_ceiling` is `true`,

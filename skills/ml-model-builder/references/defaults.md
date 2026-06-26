@@ -42,10 +42,18 @@ Use this file for sensible defaults when the user does not specify choices.
 
 ## Baseline Models
 
+All entries here are `[SPEC]` — use the documented algorithm exactly. A
+dataset-grounded deviation (e.g. memory constraint on a huge dataset) may
+be proposed to the user; a generic preference ("model X usually does better")
+is not a valid basis.
+
 - Classification: LogisticRegression with standardization and one-hot encoding
+  `[SPEC]`
 - Regression: Ridge regression with standardization and one-hot encoding
-- Time series: seasonal naive or last-value baseline
+  `[SPEC]`
+- Time series: seasonal naive or last-value baseline `[SPEC]`
 - Anomaly: IsolationForest; if time series, add rolling stats before model
+  `[SPEC]`
 
 ## Iteration Models
 
@@ -83,10 +91,14 @@ inexpensive in the Optuna budget.
 
 ## Split Strategy Defaults
 
+All split ratios in this section are `[SPEC]` — use them exactly, or propose
+a dataset-grounded deviation to the user. Generic preferences (e.g. "I prefer
+more validation data") are not valid grounds for deviation.
+
 - Random split: 80/10/10 (train/validation/holdout test); use stratification
-  for classification
+  for classification. `[SPEC]`
 - Time series: chronological — first 80% train, next 10% validation, final
-  10% holdout test; no shuffling
+  10% holdout test; no shuffling. `[SPEC]`
 
 ## Split and CV Guidance
 
@@ -105,15 +117,25 @@ inexpensive in the Optuna budget.
 
 ## Training Bounds Defaults
 
+All values in this section are `[SPEC]` unless tagged otherwise — use them
+exactly, or propose a dataset-grounded deviation to the user. **Never invent
+a shorter timeout on your own initiative** (see SKILL.md "Spec discipline").
+
 - Baseline: single run, no trials (baseline is a fixed configuration, not a
-  search)
-- Main trials: 500 (effectively uncapped — let Optuna converge)
-- Main time: 8 hours (failsafe only — only triggers if something is stuck or
-  misconfigured)
+  search). `[SPEC]`
+- Main trials: 500 (effectively uncapped — let Optuna converge). `[SPEC]`
+- **Main time budget: 8 hours (28800 seconds)** — failsafe only. **`[SPEC]`**
+  The user may override this at intake (recorded in
+  `config.json.bounds.main_minutes` as `[DEFAULT]` if not set). If unset, use
+  exactly 28800 seconds. **Do not silently shorten this to "be safe."**
 - Early stop: after 25 non-improving trials AND < 0.1% relative gain over
-  those 25 trials
+  those 25 trials. `[SPEC]`
 - The primary stopping signal is convergence, not time. Log progress every
   10 trials.
+- **Stacking time budget: unlimited** by default. `[SPEC]` The user may
+  override this at intake (recorded in
+  `config.json.bounds.stacking_minutes`). If unset, do not impose any
+  timeout. **Do not invent a stacking timeout on your own initiative.**
 - If dataset has > 500k rows, warn the user that trials will be slower and
   suggest they may want to cap trials manually.
 
@@ -129,7 +151,8 @@ inexpensive in the Optuna budget.
 
 ## Reproducibility
 
-- Default random seed: 42 (ask the user first; use default if not provided).
+- Default random seed: 42 `[DEFAULT]` (ask the user first; use default if not
+  provided).
 - The seed must be applied **everywhere a stochastic decision is made**, not
   just to Optuna. Concretely:
   - `random.seed(random_seed)` at process start.

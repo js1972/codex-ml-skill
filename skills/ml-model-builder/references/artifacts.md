@@ -65,7 +65,9 @@ Also write `results.md` in the project root with a concise final summary.
     "best_single_score": 0.79,
     "ensemble_score": 0.81,
     "adopted": true,
-    "reason": "ensemble beat best single by 2.5%"
+    "reason": "ensemble beat best single by 2.5%",
+    "time_limit_seconds_used": null,
+    "time_limit_source": "spec_unlimited"
   },
   "ceiling_check": {
     "near_ceiling": false,
@@ -116,6 +118,10 @@ Also write `results.md` in the project root with a concise final summary.
     "baseline_trials": 1,
     "main_trials": 500,
     "main_hours": 8,
+    "main_seconds_used": 28800,
+    "main_seconds_source": "spec_default",
+    "stacking_seconds_used": null,
+    "stacking_seconds_source": "spec_unlimited",
     "early_stop_no_improve_trials": 25,
     "early_stop_min_relative_gain": 0.001
   },
