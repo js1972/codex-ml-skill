@@ -194,6 +194,15 @@ above are real and structural — **AutoGluon is roughly 10–50× heavier on
 every inference-time dimension.** A 2% AUC lift can easily cost 30× more
 memory, 40× more latency, and exclude entire deployment targets.
 
+> ⚠ **If you're building a real-time API, AutoGluon is probably too slow.**
+> A per-row prediction latency of 50–500 ms (AutoGluon) vs 1–10 ms
+> (transparent pipeline) is the difference between an API that feels
+> instantaneous and one that introduces a visible delay on every call.
+> For any latency-sensitive serving path — user-facing predictions,
+> high-volume scoring, fraud detection, real-time recommendations —
+> the transparent pipeline is the safer default even when AutoGluon
+> wins on score.
+
 ### When the transparent pipeline is the right choice
 
 - Deployment target is **AWS Lambda, Cloud Functions, Cloudflare Workers**,

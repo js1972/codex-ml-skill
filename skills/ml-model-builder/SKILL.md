@@ -740,6 +740,29 @@ If AutoGluon was meaningfully better (>3%), say so equally plainly:
 > The most likely reason is its diverse model zoo (neural nets, fastai
 > tabular) which our pipeline does not include."
 
+**Always include the deployment-cost callout**
+
+Regardless of the score gap, every AutoML comparison section in
+`results.md` must end with this deployment trade-off paragraph (substitute
+the actual numbers from this run where you have them, otherwise use the
+order-of-magnitude defaults):
+
+> "**Deployment trade-off.** AutoGluon needs roughly **10–50× more memory**
+> and **40× longer per-prediction** than the transparent pipeline at
+> inference time. If you intend to serve predictions via a real-time API,
+> a serverless function (AWS Lambda, Cloud Functions, Cloudflare Workers),
+> an edge device, or any high-throughput batch pipeline, AutoGluon is
+> likely too heavy — the transparent pipeline's lower latency and smaller
+> footprint will save more than the AutoML lift is worth. AutoGluon is the
+> right choice when the model will be served from a long-running container
+> with generous memory and latency tolerance, and the score gap is
+> meaningfully above 1%."
+
+This callout is mandatory because the score gap alone is misleading —
+users typically only see a percentage and don't consider the operational
+cost. The deployment trade-off is what determines whether AutoGluon is
+actually usable for a given application.
+
 **Save the AutoGluon model**
 
 Save AutoGluon's predictor directory as `artefacts/autogluon_predictor/`

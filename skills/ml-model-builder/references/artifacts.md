@@ -242,6 +242,20 @@ section briefly stating why.
 1–3% → "small but real gap"; >3% → "AutoGluon meaningfully better, consider
 its diverse model zoo".)
 
+**Deployment trade-off** (mandatory — include this paragraph verbatim
+or with the actual numbers from this run):
+
+> AutoGluon needs roughly **10–50× more memory** and **~40× longer
+> per-prediction** than the transparent pipeline at inference time. If
+> you plan to serve predictions via a real-time API, a serverless function
+> (AWS Lambda, Cloud Functions, Cloudflare Workers), an edge device, or
+> high-throughput batch pipeline, AutoGluon is likely too heavy — the
+> transparent pipeline's lower latency and smaller footprint will save
+> more than the AutoML lift is worth. AutoGluon is the right choice when
+> the model will be served from a long-running container with generous
+> memory and latency tolerance, and the score gap is meaningfully above
+> 1%.
+
 Inference with the AutoGluon model:
 ```bash
 python -c "from autogluon.tabular import TabularPredictor; \
