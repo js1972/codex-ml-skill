@@ -126,6 +126,10 @@ under a plain-language verdict band (within 1% / 1-3% / >3%), so the
 user can answer "would I do better with off-the-shelf AutoML on this
 dataset?" without guessing.
 
+**This is not just a score comparison — it's a deployment-cost comparison.**
+See "Choosing which model to deploy" below for the trade-offs that go
+beyond holdout AUC.
+
 ### Honest holdout
 
 The holdout test set is set aside at the very start and not touched
@@ -161,6 +165,77 @@ data profile, profiling decisions, signal check, best model, AutoML
 comparison (if run), ceiling check, training process, "What to try next"
 (state-dependent recommendations), inference command, and reproducibility
 footer.
+
+## Choosing which model to deploy
+
+When the skill is run with the AutoGluon opt-in enabled, you end up with
+two candidate models on disk:
+
+- `model.joblib` — the **transparent pipeline** trained by the skill
+- `autogluon_predictor/` — the **AutoGluon predictor**
+
+AutoGluon will often win on holdout score by 1–3% on tabular data — but
+that is rarely the only thing that matters. The two artefacts have very
+different costs at inference time:
+
+| Dimension | Transparent pipeline (`model.joblib`) | AutoGluon predictor |
+|---|---|---|
+| Dependencies | scikit-learn + (lightgbm/xgboost/catboost) | AutoGluon + PyTorch + FastAI + ~30 deps |
+| Disk footprint (inference) | ~150–300 MB | ~1.5–3 GB |
+| Cold start | < 500 ms | 5–15 s |
+| Per-row latency | 1–10 ms | 50–500 ms |
+| Resident memory | ~100 MB | ~500 MB – 2 GB |
+| Deployable to Lambda / edge / Workers | ✅ Yes | ❌ No (too large, PyTorch required) |
+| Reproducibility at fixed seed | Identical runs | Mostly reproducible; ensemble can vary |
+| Inspectable / debuggable | ✅ Single sklearn pipeline | ❌ Opaque ensemble runtime |
+
+The numbers vary slightly by dataset, but the order-of-magnitude gaps
+above are real and structural — **AutoGluon is roughly 10–50× heavier on
+every inference-time dimension.** A 2% AUC lift can easily cost 30× more
+memory, 40× more latency, and exclude entire deployment targets.
+
+### When the transparent pipeline is the right choice
+
+- Deployment target is **AWS Lambda, Cloud Functions, Cloudflare Workers**,
+  or any environment with size/memory limits
+- Inference latency matters (real-time APIs, user-facing predictions,
+  high-throughput batch scoring)
+- The model needs to be **inspectable** by stakeholders, auditors, or
+  another engineer
+- Exact reproducibility at fixed seed matters (research, regulated industries)
+- The model will be served on a small/cheap instance class
+- The AutoML comparison gap is **within 1%** ("competitive") — almost
+  always pick the transparent pipeline here; the AutoGluon score lift is
+  inside the noise floor and the deployment cost is huge
+
+### When AutoGluon is the right choice
+
+- Maximum holdout score is the only thing that matters and you have
+  generous infrastructure for inference
+- The model will be served from a long-running container with ≥4 GB RAM
+  allocated and no cold-start sensitivity
+- A 2–3% lift on the chosen metric is worth meaningful operational cost
+  (i.e. the model is high-stakes and "good enough" isn't)
+- The AutoML comparison gap is **>3%** ("meaningfully better") and the
+  deployment can absorb the inference footprint
+
+### When both can coexist
+
+- Use the transparent pipeline as the **production model** (Lambda,
+  edge, anywhere lean)
+- Keep AutoGluon as the **occasional benchmark** — re-run it every quarter
+  to confirm your pipeline still tracks the AutoML state of the art on
+  your dataset. If the gap grows beyond your tolerance, that's a signal
+  to invest in better features or expand the transparent pipeline's
+  model pool.
+
+### The honest summary
+
+The skill's distinctive value is **a transparent, reproducible, lightweight
+pipeline you can deploy anywhere**. AutoGluon's distinctive value is
+**raw model quality**. They are not interchangeable, and the AutoML
+comparison feature exists specifically so you can see exactly what
+you're trading off before you ship. Don't pick blind.
 
 ## How decisions are made — spec discipline
 
