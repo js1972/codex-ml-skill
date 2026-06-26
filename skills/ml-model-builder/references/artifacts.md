@@ -63,6 +63,12 @@ Also write `results.md` in the project root with a concise final summary.
     "adopted": true,
     "reason": "ensemble beat best single by 2.5%"
   },
+  "ceiling_check": {
+    "near_ceiling": false,
+    "family_score_spread_pct": 0.018,
+    "baseline_to_best_gain_pct": 0.072,
+    "note": "Top-3 families spread 1.8%; baseline-to-best gain 7.2% — headroom remains."
+  },
   "final": {
     "score": 0.81,
     "eval_set": "holdout_test",
@@ -191,6 +197,19 @@ Also write `results.md` in the project root with a concise final summary.
 - What AUC means: probability the model ranks a positive example above a
   negative one; higher is better.
 
+## Ceiling check
+- Top-3 family validation spread: 1.8% relative (LightGBM 0.89, XGBoost 0.88,
+  RandomForest 0.875)
+- Baseline → best gain: 7.2% relative
+- Verdict: headroom remains — different models still produce meaningfully
+  different scores, and the iteration step beat the baseline by a non-trivial
+  margin.
+
+(If `near_ceiling = true`, replace the verdict with the plain-language
+explanation from SKILL.md §4.6 — e.g. "All families clustered within ~1%
+and stacking did not help; further trials are unlikely to improve this
+score.")
+
 ## Training process
 - Split: random 80/10/10 (train/validation/holdout), stratified
 - Preprocessing: median imputation + one-hot encoding (fit on training fold only)
@@ -199,6 +218,25 @@ Also write `results.md` in the project root with a concise final summary.
 - Trials run: 87 (converged — 25 non-improving trials with < 0.1% gain)
 - Stacking: 3 base learners selected, ensemble beat best single by 2.2% → adopted
 - Seed: 42
+
+## What to try next
+
+Generate this section from the run's state — do not boilerplate it. Use the
+rules below:
+
+- **If `near_ceiling = true`**: list (in this order) collecting new features,
+  reframing the target, joining external context, and — if any text fields
+  exist — trying an LLM-based approach. Do not suggest "more trials" or
+  "different hyperparameters"; those will not help.
+- **If stacking was skipped because too few families converged**: suggest
+  adding the missing families (e.g. "CatBoost was not installed; installing
+  it could enable stacking").
+- **If baseline → best gain was modest (<5%) but signal was clearly present**:
+  suggest feature engineering targeted at the top SHAP features.
+- **If SHAP was not run**: suggest running it to identify which features
+  are driving the score — a one-line recommendation, not a paragraph.
+- **Always**: name the single most important data lever the user could pull,
+  in one sentence.
 
 ## Inference
 - Run: `python artefacts/infer.py --input new_data.csv --output predictions.csv`
@@ -209,6 +247,20 @@ Also write `results.md` in the project root with a concise final summary.
 - artefacts/infer.py
 - artefacts/metrics.json
 - artefacts/config.json
+
+---
+## Reproducibility
+
+This footer makes the artefact on disk the source of truth — if a chat
+summary disagrees with these numbers, trust this footer.
+
+- Random seed: 42
+- Trials run: 87 (Optuna TPESampler, convergence: 25 non-improving with <0.1% gain)
+- Final eval set: holdout_test (532 rows, never touched during search)
+- Baseline algorithm: LogisticRegression (fixed per task type)
+- Source repo commit: <git rev-parse HEAD if available>
+- Python: 3.x.y · scikit-learn x.y · optuna x.y · lightgbm x.y · xgboost x.y
+- Generated: <ISO timestamp>
 ```
 
 ## No-signal results.md variant

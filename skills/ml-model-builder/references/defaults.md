@@ -110,10 +110,23 @@ Use this file for sensible defaults when the user does not specify choices.
 ## Reproducibility
 
 - Default random seed: 42 (ask the user first; use default if not provided).
-- Apply the seed to: Python `random`, NumPy, scikit-learn models,
-  XGBoost/LightGBM/CatBoost, and
-  `optuna.samplers.TPESampler(seed=random_seed)`.
+- The seed must be applied **everywhere a stochastic decision is made**, not
+  just to Optuna. Concretely:
+  - `random.seed(random_seed)` at process start.
+  - `numpy.random.seed(random_seed)` at process start.
+  - `random_state=random_seed` passed to **every** scikit-learn model
+    constructor that accepts it (`LogisticRegression`, `Ridge`,
+    `RandomForestClassifier`, `HistGradientBoosting*`, `IsolationForest`, …).
+  - `random_state=random_seed` passed to **every** split function:
+    `train_test_split`, `StratifiedKFold`, `KFold`, `GroupKFold`,
+    `ShuffleSplit`, `TimeSeriesSplit` (where supported).
+  - `random_state=random_seed` (or library equivalent) passed to XGBoost
+    (`random_state`), LightGBM (`random_state`), and CatBoost (`random_seed`).
+  - `optuna.samplers.TPESampler(seed=random_seed)`.
 - A run with the same seed, data, and config must produce identical results.
+  If you see >0.5 percentage-point drift across re-runs with the same seed,
+  a stochastic component is unseeded — find it and fix it before reporting
+  the run as complete.
 
 ## Leakage Guard
 

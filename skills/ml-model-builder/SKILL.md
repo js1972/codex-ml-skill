@@ -216,7 +216,25 @@ without explaining them. Example format:
 - List what was fixed automatically and what decisions the user made.
 - Only proceed to baseline once all confirmations are resolved.
 
-## 3) Baseline model
+## 3) Baseline model (fixed by task — do not substitute)
+
+The baseline is intentionally a **simple, deliberately under-powered model**.
+Its purpose is to give a stable reference point so the rest of the run can
+report meaningful gains. It is **not** "the first reasonable model I tried."
+
+**You MUST use the baseline algorithm specified for the task type in
+`references/defaults.md`.** Substituting a different algorithm — even if you
+believe it would perform better — is a defect, because it makes baselines
+incomparable across runs of the same dataset and inflates or hides the gain
+from iteration.
+
+The fixed defaults are:
+- Classification: `LogisticRegression` (standardised, one-hot encoded)
+- Regression: `Ridge` (standardised, one-hot encoded)
+- Time series: seasonal naive or last-value
+- Anomaly: `IsolationForest`
+
+Other rules:
 
 - Split the dataset first (see `references/defaults.md`) into train, validation,
   and holdout test sets before any fitting:
@@ -227,8 +245,9 @@ without explaining them. Example format:
 - All preprocessing transforms (imputation, log1p, encoding, scaling) must be
   fit on the training fold only and applied to validation and holdout.
 - Report baseline metrics from the validation set and store them in
-  `artefacts/metrics.json`.
-- Use default models and metrics if the user did not specify them (see
+  `artefacts/metrics.json`, naming the baseline algorithm explicitly under
+  `baseline.details.model`.
+- Use the default metric if the user did not specify one (see
   `references/defaults.md`).
 
 ## 3.5) Signal check — REQUIRED before iteration
@@ -373,6 +392,45 @@ with: `attempted` (bool), `base_learners` (list of family names),
 or null if skipped), `adopted` (bool), `reason` (string explaining adopt /
 reject / skip).
 
+## 4.6) Ceiling check — diagnose whether more compute would help
+
+After stacking is resolved, decide whether the dataset is **near its predictive
+ceiling**. This is what tells the user "more trials won't help — you need
+different data" instead of leaving them to guess.
+
+**How to decide**
+
+Compute the validation-score spread across distinct model families that
+finished in Optuna (best single per family). Then apply:
+
+- **Near ceiling** if **all** of the following hold:
+  - The top-3 model families' validation scores are within 1.5% relative
+    of each other.
+  - Stacking was attempted and rejected (or skipped due to too few diverse
+    families).
+  - The Optuna best score is within 2% relative of the baseline.
+- **Headroom remains** otherwise.
+
+**Record in `metrics.json`**
+
+Populate `ceiling_check` with:
+- `near_ceiling` (bool)
+- `family_score_spread_pct` (float, relative spread across top-3 families)
+- `baseline_to_best_gain_pct` (float, relative gain from baseline to best
+  single model)
+- `note` (one-sentence explanation)
+
+**Reflect in `results.md`**
+
+When `near_ceiling` is true, the "Best model" section must include a
+plain-language note like:
+> "Across LightGBM, XGBoost, and RandomForest the validation AUC sits
+> between 0.843 and 0.851 — a spread of less than 1%. Stacking also failed
+> to improve the result. This dataset appears to be near its predictive
+> ceiling for these features; running more trials or trying more models is
+> unlikely to help. Better gains will come from new features or a different
+> target definition (see 'What to try next' below)."
+
 ## 5) Outputs
 
 - Create `artefacts/` if it does not exist.
@@ -406,13 +464,20 @@ hand off a partial run.
       skip condition applied (recorded in `stacking.reason`). For time-series
       and anomaly detection, `attempted` is `false` with the appropriate
       reason.
+- [ ] **Ceiling check** ran and is recorded in `metrics.json` under
+      `ceiling_check` (`near_ceiling`, `family_score_spread_pct`,
+      `baseline_to_best_gain_pct`, `note`). If `near_ceiling` is `true`,
+      the "Best model" section of `results.md` includes the plain-language
+      explanation.
 - [ ] Final score comes from the holdout test set, not validation, and
       `final.eval_set == "holdout_test"` in `metrics.json`.
 - [ ] `model.joblib`, `train.py`, `infer.py`, `metrics.json`, `config.json`,
       and `results.md` all exist (unless the run halted at the no-signal gate,
       in which case `metrics.json` and `config.json` still exist).
-- [ ] Plain-language `results.md` written, including the signal-check verdict
-      and the stacking outcome.
+- [ ] Plain-language `results.md` written, including the signal-check verdict,
+      stacking outcome, ceiling-check verdict, a "What to try next" section
+      tailored to the run, and a reproducibility footer (seed, trials,
+      package versions, timestamp).
 
 If any item failed, fix it and re-check before reporting completion.
 
