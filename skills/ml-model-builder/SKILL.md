@@ -172,6 +172,64 @@ better model — is wrong, because it removes the user's ability to know what
 trade-offs the skill made on their behalf. Transparency is what makes this
 skill distinct from a black-box AutoML system; silent deviations erode it.
 
+## Long-running steps must run in background mode
+
+The Claude Code Bash tool imposes a **10-minute (600,000 ms) ceiling** on
+foreground calls. This ceiling is at the harness level — it will kill any
+foreground command at 10 minutes regardless of what `timeout` you passed to
+Python, Optuna, AutoGluon, or anything else. Your in-Python timeout is the
+target; the foreground Bash ceiling is the killer.
+
+**You MUST run the following steps in background mode via
+`Bash(run_in_background=true)` and poll for completion via `TaskOutput`:**
+
+1. **§4 Optuna iteration** — any non-trivial trial budget will exceed 10
+   minutes on datasets larger than a few thousand rows. Always background.
+2. **§4.5 Stacking ensemble** — fitting N base learners with 5-fold CV plus
+   a meta-learner can easily exceed 10 minutes. Always background.
+3. **§4.7 AutoGluon comparison** — defaults to a 5- or 15-minute fit budget,
+   which alone meets or exceeds the foreground ceiling. Always background.
+4. **Any other Python invocation** you have reason to believe will run for
+   more than ~5 minutes (large model.joblib save, full-dataset SHAP, etc.).
+
+### How to do it
+
+1. Write the Python script to a file (`artefacts/_optuna_search.py`,
+   `artefacts/_stacking.py`, `artefacts/_autogluon.py`) so the background
+   invocation has something to load.
+2. Invoke via:
+   ```
+   Bash(command=".venv/bin/python artefacts/_optuna_search.py",
+        run_in_background=true,
+        description="Optuna search (background)")
+   ```
+3. The tool returns a task ID. Print a progress header
+   `▶ Step N/11 — <name> (background)` so the user sees it has started.
+4. Poll with `TaskOutput(task_id=..., block=true, timeout=...)` to wait for
+   completion. The Python script should write its results to a known
+   location (e.g. `artefacts/_optuna_result.json`) that you read after the
+   task completes.
+5. On completion, print the closing `✓ Step N/11 done` header with the
+   summary line as usual.
+
+### What you must NOT do
+
+- Run Optuna, stacking, or AutoGluon as a foreground Bash call. The 10-minute
+  ceiling will kill it and you will be unable to honour the user's chosen
+  time budget. This is a defect.
+- Set `timeout=600000` (or any other shortened value) on the foreground Bash
+  call as a workaround. The fix is background mode, not a shorter timeout.
+- Decide "this run is small, foreground should be fine." On wine quality
+  (5k rows) the previous run hit 7+ minutes in Optuna alone. You cannot
+  reliably predict which datasets will fit under 10 minutes — always use
+  background mode for these steps.
+
+### Record what you did
+
+In `config.json`, under each long-running step's block, record
+`execution_mode: "background"` and `task_id: "<id>"`. The compliance
+checklist verifies this.
+
 ## 0) Environment setup (required)
 
 - Before running any Python code or installing dependencies, create a venv in
@@ -451,6 +509,10 @@ Whether signal is detected or not, populate `signal_check` in
 
 ## 4) Iteration
 
+**Execution mode:** Optuna trials must run in **background mode** (see
+"Long-running steps must run in background mode" above). The foreground
+Bash ceiling is 10 minutes; foreground will silently kill long runs.
+
 - Use **Optuna with TPESampler** as the hyperparameter optimizer. Install into
   venv if needed (`optuna`).
 - Seed TPESampler with the agreed random seed:
@@ -493,6 +555,10 @@ Whether signal is detected or not, populate `signal_check` in
   the spec default or a user override.
 
 ## 4.5) Stacking ensemble — REQUIRED to attempt for classification and regression
+
+**Execution mode:** Stacking must run in **background mode** (see
+"Long-running steps must run in background mode" above). Fitting N base
+learners with 5-fold CV plus a meta-learner can easily exceed 10 minutes.
 
 **For classification and regression, you MUST attempt this step after Optuna
 converges.** Skipping it silently — when none of the explicit "skip when"
@@ -597,6 +663,10 @@ plain-language note like:
 > target definition (see 'What to try next' below)."
 
 ## 4.7) AutoGluon comparison (opt-in)
+
+**Execution mode:** AutoGluon must run in **background mode** (see
+"Long-running steps must run in background mode" above). Default budget
+is 5–15 minutes, which meets or exceeds the foreground ceiling.
 
 Run this step **only if the user opted in** during intake
 (`comparison.autogluon == true`). The purpose is a fair head-to-head: how
@@ -736,6 +806,13 @@ hand off a partial run.
 - [ ] `model.joblib`, `train.py`, `infer.py`, `metrics.json`, `config.json`,
       and `results.md` all exist (unless the run halted at the no-signal gate,
       in which case `metrics.json` and `config.json` still exist).
+- [ ] **Background execution**: Optuna, stacking, and (if opted in)
+      AutoGluon were each invoked via `Bash(run_in_background=true)` and
+      polled with `TaskOutput`. `config.json` records
+      `execution_mode: "background"` and the `task_id` for each. Any of
+      these steps run in foreground mode is a defect, because the 10-minute
+      Bash ceiling would have prevented the user's chosen time budget from
+      being honoured.
 - [ ] Plain-language `results.md` written, including the signal-check verdict,
       stacking outcome, ceiling-check verdict, AutoML comparison (only if the
       user opted in), a "What to try next" section tailored to the run, and a

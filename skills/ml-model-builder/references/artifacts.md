@@ -67,7 +67,9 @@ Also write `results.md` in the project root with a concise final summary.
     "adopted": true,
     "reason": "ensemble beat best single by 2.5%",
     "time_limit_seconds_used": null,
-    "time_limit_source": "spec_unlimited"
+    "time_limit_source": "spec_unlimited",
+    "execution_mode": "background",
+    "task_id": "bash-task-def456"
   },
   "ceiling_check": {
     "near_ceiling": false,
@@ -81,7 +83,9 @@ Also write `results.md` in the project root with a concise final summary.
     "time_limit_seconds": 300,
     "preset": "medium_quality",
     "holdout_score": 0.881,
-    "holdout_score_vs_main_pct": 0.007
+    "holdout_score_vs_main_pct": 0.007,
+    "execution_mode": "background",
+    "task_id": "bash-task-ghi789"
   },
   "final": {
     "score": 0.81,
@@ -128,7 +132,9 @@ Also write `results.md` in the project root with a concise final summary.
   "optuna": {
     "sampler": "TPESampler",
     "seed": 42,
-    "cv_folds": null
+    "cv_folds": null,
+    "execution_mode": "background",
+    "task_id": "bash-task-abc123"
   },
   "environment": {
     "venv_path": ".venv",
