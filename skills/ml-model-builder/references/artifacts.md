@@ -13,6 +13,10 @@ Also write `results.md` in the project root with a concise final summary.
 - `artefacts/config.json`
 - Optional explainability output: `artefacts/shap_summary.html` — beeswarm
   summary plot of top 20 features by mean absolute SHAP value
+- Optional AutoML comparison output (only when user opted in):
+  `artefacts/autogluon_predictor/` — full AutoGluon predictor directory
+  (not a single file). Load with
+  `TabularPredictor.load('artefacts/autogluon_predictor')`.
 - `results.md` (summary in project root)
 
 ## Scripts Expectations
@@ -68,6 +72,14 @@ Also write `results.md` in the project root with a concise final summary.
     "family_score_spread_pct": 0.018,
     "baseline_to_best_gain_pct": 0.072,
     "note": "Top-3 families spread 1.8%; baseline-to-best gain 7.2% — headroom remains."
+  },
+  "autogluon": {
+    "attempted": true,
+    "reason": null,
+    "time_limit_seconds": 300,
+    "preset": "medium_quality",
+    "holdout_score": 0.881,
+    "holdout_score_vs_main_pct": 0.007
   },
   "final": {
     "score": 0.81,
@@ -160,6 +172,9 @@ Also write `results.md` in the project root with a concise final summary.
     "max_base_learners": 5,
     "family_score_window": 0.1,
     "acceptance_relative_gain": 0.005
+  },
+  "comparison": {
+    "autogluon": false
   }
 }
 ```
@@ -196,6 +211,31 @@ Also write `results.md` in the project root with a concise final summary.
 - Baseline AUC: 0.83 (validation)
 - What AUC means: probability the model ranks a positive example above a
   negative one; higher is better.
+
+## AutoML comparison (only if user opted in)
+
+Include this section only when `autogluon.attempted == true`. If the user
+did not opt in, omit the section entirely. If they opted in but the run
+was skipped (small data, install failure, time-series task), include the
+section briefly stating why.
+
+- AutoGluon score: AUC = 0.881 (same holdout, medium_quality preset, 5 min budget)
+- Transparent pipeline score: AUC = 0.875 (same holdout)
+- Gap: +0.7% in AutoGluon's favour (within margin of error)
+- Verdict: "Within margin of error — the transparent pipeline is competitive
+  with off-the-shelf AutoML on this dataset. Use the transparent pipeline if
+  you value inspectability; use AutoGluon if you only care about the score."
+
+(Adjust the verdict per the bands in SKILL.md §4.7: within 1% → "competitive";
+1–3% → "small but real gap"; >3% → "AutoGluon meaningfully better, consider
+its diverse model zoo".)
+
+Inference with the AutoGluon model:
+```bash
+python -c "from autogluon.tabular import TabularPredictor; \
+  p = TabularPredictor.load('artefacts/autogluon_predictor'); \
+  print(p.predict(...))"
+```
 
 ## Ceiling check
 - Top-3 family validation spread: 1.8% relative (LightGBM 0.89, XGBoost 0.88,

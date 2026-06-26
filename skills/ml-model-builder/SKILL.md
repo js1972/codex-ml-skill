@@ -13,9 +13,10 @@ convergence-based stopping, and save code and artifacts under `artefacts/`.
 
 ## Workflow
 
-This workflow has 9 steps. **Every step must run** unless its own "skip when"
-clause applies. Steps 4 (signal check) and 6 (stacking) are mandatory gates,
-not optional enrichments — skipping them silently is a defect.
+This workflow has 11 steps. **Every step must run** unless its own "skip when"
+clause applies. Steps 5 (signal check) and 7 (stacking) are mandatory gates,
+not optional enrichments — skipping them silently is a defect. Step 9
+(AutoGluon comparison) runs only if the user opted in at intake.
 
 1. Intake and clarify requirements.
 2. Set up Python environment.
@@ -24,12 +25,17 @@ not optional enrichments — skipping them silently is a defect.
 4. Split into train/validation/holdout sets and train baseline model.
 5. **Signal check** — compare baseline against label-shuffled baselines.
    If no signal is detected, halt and ask the user before proceeding.
-6. Iterate with Optuna/TPESampler until convergence.
+6. Iterate with Optuna/TPESampler until convergence. The pool must include
+   at least one non-tree model family (see §4 and `references/defaults.md`).
 7. **Stacking ensemble** — for classification/regression, attempt a stacking
    ensemble of top diverse trial models. Adopt if it beats the best single
    model on validation; otherwise record the attempt and keep the single best.
-8. Evaluate the chosen model **once** on the holdout test set.
-9. Save artifacts and produce `results.md`.
+8. **Ceiling check** — decide whether the dataset is near its predictive
+   ceiling and record the verdict.
+9. **AutoGluon comparison** (opt-in only) — if the user opted in at intake,
+   run AutoGluon on the same split as a head-to-head reference.
+10. Evaluate the chosen model **once** on the holdout test set.
+11. Save artifacts and produce `results.md`.
 
 Before declaring the run complete, work through the compliance checklist in
 step 9. Any unchecked item means the run is not finished.
@@ -44,11 +50,12 @@ either is a defect:
 **1. Maintain a TodoWrite list for the whole run.**
 
 Before any other tool call in step 1, call `TodoWrite` with one todo per
-workflow step (1–9), using the step names from the workflow overview above.
+workflow step (1–11), using the step names from the workflow overview above.
 Mark each as `in_progress` when you start it and `completed` when you finish
 it. If a step is replaced or skipped per its own "skip when" rules, mark it
 `completed` with a brief note in the activeForm explaining what happened
-(e.g. "skipped — time-series forecasting").
+(e.g. "skipped — time-series forecasting"; "skipped — user did not opt in
+to AutoGluon").
 
 **2. Print a plain-text header at each major step boundary.**
 
@@ -57,20 +64,23 @@ piped output, IDE without checkbox rendering). At the start of each major
 step, print a single header line in this exact format:
 
 ```
-▶ Step N/9 — <step name>
+▶ Step N/11 — <step name>
 ```
 
 At the end of each step, print a one-line result summary:
 
 ```
-✓ Step N/9 done — <one-line result, e.g. "baseline AUC 0.81 on validation">
+✓ Step N/11 done — <one-line result, e.g. "baseline AUC 0.81 on validation">
 ```
 
-For the two gates specifically, the closing line must include the verdict:
+For the mandatory gates and AutoGluon comparison, the closing line must
+include the verdict:
 
 ```
-✓ Step 5/9 done — signal detected (real 0.81 vs shuffled 0.50 ± 0.02)
-✓ Step 7/9 done — stacking rejected (4 families, +0.48% < 0.5% threshold)
+✓ Step 5/11 done — signal detected (real 0.81 vs shuffled 0.50 ± 0.02)
+✓ Step 7/11 done — stacking rejected (4 families, +0.48% < 0.5% threshold)
+✓ Step 8/11 done — near ceiling (top-3 spread 0.8%, stacking failed)
+✓ Step 9/11 done — AutoGluon 0.881 vs pipeline 0.875 (+0.7% gap)
 ```
 
 These headers go to normal terminal output — not inside a tool call, not in
@@ -102,6 +112,15 @@ todo list is hidden.
 - Ask for any domain-specific feature ideas and confirm whether to apply
   standard feature engineering (date parts, lags, transforms).
 - Ask whether to run explainability (SHAP) and whether to change training bounds.
+- Ask whether to run an **AutoGluon comparison** alongside the main pipeline.
+  Phrase the question in plain language and default to **No**:
+  > "Would you like me to also run AutoGluon (an AutoML system) for a
+  > head-to-head comparison against the transparent pipeline? It adds
+  > ~2 GB of install and 5–15 minutes of extra runtime. This is useful if
+  > you want to know whether an off-the-shelf AutoML system would produce
+  > a better model on this dataset. [y/N]"
+  Record the user's choice in `artefacts/config.json` under
+  `comparison.autogluon` (bool).
 - If multiple dataset locations are provided, ask how to combine them and
   whether to add a source column.
 - Run a quick LLM suitability check (see `references/defaults.md`). If it
@@ -330,6 +349,14 @@ Whether signal is detected or not, populate `signal_check` in
   splitting.
 - Include non-sklearn models when appropriate (XGBoost, LightGBM, CatBoost).
   Install into venv if needed.
+- **You MUST include at least one non-tree model family in the iteration
+  pool** (see `references/defaults.md`). Tree-only pools make stacking
+  ineffective because tree models produce correlated errors. Concretely:
+  for classification, include `LogisticRegression(penalty='elasticnet')`
+  *and* at least one of `KNeighborsClassifier` / `GaussianNB`; for
+  regression, include `ElasticNet` and `KNeighborsRegressor`. Use small
+  search spaces (1–3 hyperparameters each) so these don't dominate the
+  Optuna budget — their purpose is stacking diversity, not winning solo.
 - Expand feature engineering if it improves the metric and does not introduce
   leakage.
 - Use the agreed metric to pick the best model.
@@ -431,6 +458,87 @@ plain-language note like:
 > unlikely to help. Better gains will come from new features or a different
 > target definition (see 'What to try next' below)."
 
+## 4.7) AutoGluon comparison (opt-in)
+
+Run this step **only if the user opted in** during intake
+(`comparison.autogluon == true`). The purpose is a fair head-to-head: how
+does the transparent pipeline compare to an off-the-shelf AutoML system on
+this exact dataset?
+
+This is co-existence, not competition. AutoGluon produces its own model and
+its own score, on the same data, with the same split. Both models are saved.
+The user sees both. The skill does not pick a "winner" — it reports the gap
+and lets the user decide.
+
+**Skip without asking when**
+
+- Time-series forecasting (AutoGluon's tabular API doesn't handle this
+  directly; the comparison would be unfair).
+- Unsupervised anomaly detection (no labels for AutoGluon to learn from).
+- Dataset is very small (< 200 rows) — AutoGluon needs a meaningful amount
+  of data to work well; report the skip in `results.md`.
+
+In these cases record `autogluon.attempted = false` and `autogluon.reason`
+in `metrics.json`. Do not silently omit the section.
+
+**Install**
+
+- Install `autogluon.tabular` into the venv only if not already present.
+  This is large (~2 GB) — the user has already opted in at intake, but if
+  install fails (disk space, network), record `autogluon.attempted = false`
+  and `autogluon.reason = "install failed: <error>"` and continue with the
+  main pipeline result. Do not halt the run.
+
+**How to run it**
+
+- Use the **same `train + validation` data** that the main pipeline uses for
+  Optuna optimization. Use the **same untouched holdout set** for final
+  evaluation. This guarantees a fair comparison.
+- Construct `TabularPredictor(label=<target>, eval_metric=<metric>, path=...)`
+  using the user's chosen metric.
+- Call `predictor.fit(train_data, time_limit=<budget_seconds>, presets="medium_quality")`.
+- Default budget: **5 minutes** (300 s) for datasets < 100k rows; 15 minutes
+  (900 s) for larger datasets. Pass these as `time_limit`. The presets
+  `"medium_quality"` is the right default — `"best_quality"` runs much longer
+  and uses more compute than the comparison warrants.
+- Score the resulting predictor on the holdout set with the same metric the
+  main pipeline uses. Record both predictions and the score.
+
+**Record in `metrics.json`**
+
+Populate `autogluon` with: `attempted` (bool), `reason` (string if not
+attempted), `time_limit_seconds` (int), `preset` (string),
+`holdout_score` (float), `holdout_score_vs_main_pct` (float, relative
+difference: positive means AutoGluon better).
+
+**Reflect in `results.md`**
+
+Add an "AutoML comparison" section under "Best model":
+> "**AutoML comparison.** AutoGluon (medium_quality preset, 5 min budget)
+> scored 0.881 AUC on the same holdout set, compared to 0.875 from our
+> transparent pipeline — a gap of +0.7% in AutoGluon's favour.
+>
+> If you want the strongest possible model and don't need transparency,
+> consider using AutoGluon directly. If you want a reproducible, inspectable
+> pipeline with comparable performance, the transparent model is a good
+> choice."
+
+If AutoGluon scored within 1% of the main pipeline, say so plainly:
+> "Within margin of error — the transparent pipeline is competitive with
+> off-the-shelf AutoML on this dataset."
+
+If AutoGluon was meaningfully better (>3%), say so equally plainly:
+> "AutoGluon outperformed the transparent pipeline by 3.4% on this dataset.
+> The most likely reason is its diverse model zoo (neural nets, fastai
+> tabular) which our pipeline does not include."
+
+**Save the AutoGluon model**
+
+Save AutoGluon's predictor directory as `artefacts/autogluon_predictor/`
+(it's a directory, not a single file). Document its inference command in
+`results.md` alongside the main `infer.py` command. Do not replace
+`model.joblib` — the main pipeline's model remains the primary artefact.
+
 ## 5) Outputs
 
 - Create `artefacts/` if it does not exist.
@@ -458,7 +566,9 @@ hand off a partial run.
 - [ ] If signal was not detected, the user was asked whether to proceed and
       their choice is recorded in `signal_check.user_overrode_no_signal`.
 - [ ] Optuna ran (or was explicitly skipped due to no-signal halt) and the
-      trial count plus convergence reason is recorded.
+      trial count plus convergence reason is recorded. The iteration pool
+      included **at least one non-tree model family** (LogReg-elasticnet,
+      KNN, GaussianNB, or equivalent).
 - [ ] **Stacking** is recorded in `metrics.json` under `stacking`. For
       classification/regression, `attempted` is `true` unless an explicit
       skip condition applied (recorded in `stacking.reason`). For time-series
@@ -469,15 +579,23 @@ hand off a partial run.
       `baseline_to_best_gain_pct`, `note`). If `near_ceiling` is `true`,
       the "Best model" section of `results.md` includes the plain-language
       explanation.
+- [ ] **AutoGluon comparison**: if the user opted in at intake
+      (`config.json.comparison.autogluon == true`), the comparison ran and
+      `autogluon` is populated in `metrics.json` with `attempted` (bool),
+      `holdout_score` (float or null if skipped),
+      `holdout_score_vs_main_pct` (float or null), and `reason` (string
+      explaining any skip). The `autogluon_predictor/` directory exists if
+      a model was produced. If the user did not opt in, `autogluon` is
+      either omitted or `attempted: false, reason: "user did not opt in"`.
 - [ ] Final score comes from the holdout test set, not validation, and
       `final.eval_set == "holdout_test"` in `metrics.json`.
 - [ ] `model.joblib`, `train.py`, `infer.py`, `metrics.json`, `config.json`,
       and `results.md` all exist (unless the run halted at the no-signal gate,
       in which case `metrics.json` and `config.json` still exist).
 - [ ] Plain-language `results.md` written, including the signal-check verdict,
-      stacking outcome, ceiling-check verdict, a "What to try next" section
-      tailored to the run, and a reproducibility footer (seed, trials,
-      package versions, timestamp).
+      stacking outcome, ceiling-check verdict, AutoML comparison (only if the
+      user opted in), a "What to try next" section tailored to the run, and a
+      reproducibility footer (seed, trials, package versions, timestamp).
 
 If any item failed, fix it and re-check before reporting completion.
 

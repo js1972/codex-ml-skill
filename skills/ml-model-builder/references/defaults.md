@@ -49,10 +49,24 @@ Use this file for sensible defaults when the user does not specify choices.
 
 ## Iteration Models
 
-- Classification/Regression:
+The iteration pool must include **at least one non-tree model family** so that
+the stacking step (when reached) has diverse base learners to choose from. Tree
+ensembles dominate single-model accuracy on most tabular problems but make
+correlated errors with each other, which makes stacking ineffective on
+tree-only pools.
+
+- Classification/Regression — tree families (strong single-model performers):
   - RandomForest
   - GradientBoosting or HistGradientBoosting
   - XGBoost, LightGBM, or CatBoost if available or can be installed in the venv
+- Classification/Regression — **non-tree families (required for diversity)**:
+  - `LogisticRegression(penalty='elasticnet', solver='saga')` (classification)
+    or `ElasticNet` (regression) — captures linear and linear-with-interaction
+    signal that trees fit poorly
+  - `KNeighborsClassifier` / `KNeighborsRegressor` — instance-based, distance
+    metric makes errors uncorrelated with trees
+  - `GaussianNB` (classification only) — probabilistic, very different
+    inductive bias; useful for stacking even when its solo score is modest
 - Time series:
   - SARIMAX or ETS if statsmodels is available
   - ML with lag features + gradient boosting
@@ -60,6 +74,12 @@ Use this file for sensible defaults when the user does not specify choices.
 - Anomaly:
   - Tune IsolationForest
   - LocalOutlierFactor or OneClassSVM for comparison
+
+These non-tree models will usually **not** win the single-model contest against
+LightGBM/XGBoost/CatBoost on tabular data. That is expected. Their purpose is
+to provide diverse base learners for the stacking step in SKILL.md §4.5. Their
+search space should be small (1–3 hyperparameters each) to keep them
+inexpensive in the Optuna budget.
 
 ## Split Strategy Defaults
 
