@@ -1,15 +1,16 @@
 ---
 name: ml-model-builder
-description: Build classical machine learning models from local or URL datasets, including requirement gathering, data profiling, baseline training, convergence-driven iterative improvement with Optuna, and saving train/infer scripts and artifacts in artefacts/. Use when users ask to create, train, or improve classification, regression, time-series forecasting, or anomaly detection models.
+description: Build classical machine learning models from local or URL datasets in Codex or Claude Code, including requirement gathering, leakage-aware data profiling, baseline training, convergence-driven improvement with Optuna, and saving deployable train/infer artifacts. Use when users ask to create, train, evaluate, or improve classification, regression, time-series forecasting, or anomaly detection models.
 ---
 
 # ML Model Builder
 
 ## Overview
 
-Guide Codex to gather ML requirements, profile the dataset for data quality
-issues, build a baseline, iterate to a stronger model using Optuna with
-convergence-based stopping, and save code and artifacts under `artefacts/`.
+Guide Codex or Claude Code to gather ML requirements, profile the dataset for
+data quality issues, build a baseline, iterate to a stronger model using Optuna
+with convergence-based stopping, and save code and artifacts under
+`artefacts/`.
 
 ## Workflow
 
@@ -20,9 +21,10 @@ not optional enrichments — skipping them silently is a defect. Step 9
 
 1. Intake and clarify requirements.
 2. Set up Python environment.
-3. Load, validate, and profile the dataset; resolve data quality issues with
-   user confirmation.
-4. Split into train/validation/holdout sets and train baseline model.
+3. Load and validate the dataset, create train/validation/holdout assignments,
+   and profile the training partition; resolve data quality issues with user
+   confirmation.
+4. Train the fixed baseline model on the prepared split.
 5. **Signal check** — compare baseline against label-shuffled baselines.
    If no signal is detected, halt and ask the user before proceeding.
 6. Iterate with Optuna/TPESampler until convergence. The pool must include
@@ -30,15 +32,15 @@ not optional enrichments — skipping them silently is a defect. Step 9
 7. **Stacking ensemble** — for classification/regression, attempt a stacking
    ensemble of top diverse trial models. Adopt if it beats the best single
    model on validation; otherwise record the attempt and keep the single best.
-8. **Ceiling check** — decide whether the dataset is near its predictive
-   ceiling and record the verdict.
+8. **Search-plateau check** — use a documented heuristic to decide whether the
+   explored model families have plateaued and record the verdict.
 9. **AutoGluon comparison** (opt-in only) — if the user opted in at intake,
    run AutoGluon on the same split as a head-to-head reference.
 10. Evaluate the chosen model **once** on the holdout test set.
 11. Save artifacts and produce `results.md`.
 
 Before declaring the run complete, work through the compliance checklist in
-step 9. Any unchecked item means the run is not finished.
+step 11. Any unchecked item means the run is not finished.
 
 ## Progress reporting (required)
 
@@ -47,15 +49,16 @@ across many tool calls and can otherwise feel like a long silence punctuated
 by output. **Both of the following are required on every run** — missing
 either is a defect:
 
-**1. Maintain a TodoWrite list for the whole run.**
+**1. Maintain a task list for the whole run.**
 
-Before any other tool call in step 1, call `TodoWrite` with one todo per
-workflow step (1–11), using the step names from the workflow overview above.
-Mark each as `in_progress` when you start it and `completed` when you finish
-it. If a step is replaced or skipped per its own "skip when" rules, mark it
-`completed` with a brief note in the activeForm explaining what happened
-(e.g. "skipped — time-series forecasting"; "skipped — user did not opt in
-to AutoGluon").
+Before any other tool call in step 1, use the host's task/plan UI when one is
+available (`update_plan` in Codex or `TodoWrite` in Claude Code). Create one
+item per workflow step (1–11), using the step names above. Mark each item
+`in_progress` when it starts and `completed` when it finishes. If a step is
+replaced or skipped by its own rules, mark it complete with a short reason
+(for example, "skipped — time-series forecasting" or "skipped — user did not
+opt in to AutoGluon"). If the host has no task-list tool, rely on the step
+headers below.
 
 **2. Print a plain-text header at each major step boundary.**
 
@@ -83,9 +86,8 @@ include the verdict:
 ✓ Step 9/11 done — AutoGluon 0.881 vs pipeline 0.875 (+0.7% gap)
 ```
 
-These headers go to normal terminal output — not inside a tool call, not in
-a code block. They give the user a heartbeat they can scan even if the
-todo list is hidden.
+Send these headers as ordinary user-visible progress updates, not inside a
+code block. They give the user a heartbeat even when the task list is hidden.
 
 ## Spec discipline (read before any step)
 
@@ -172,63 +174,52 @@ better model — is wrong, because it removes the user's ability to know what
 trade-offs the skill made on their behalf. Transparency is what makes this
 skill distinct from a black-box AutoML system; silent deviations erode it.
 
-## Long-running steps must run in background mode
+## Long-running steps must use the host's managed-process mode
 
-The Claude Code Bash tool imposes a **10-minute (600,000 ms) ceiling** on
-foreground calls. This ceiling is at the harness level — it will kill any
-foreground command at 10 minutes regardless of what `timeout` you passed to
-Python, Optuna, AutoGluon, or anything else. Your in-Python timeout is the
-target; the foreground Bash ceiling is the killer.
-
-**You MUST run the following steps in background mode via
-`Bash(run_in_background=true)` and poll for completion via `TaskOutput`:**
+Codex and Claude Code expose different process tools, and foreground commands
+may have harness-level time limits shorter than the user-approved ML budget.
+Use the host's non-blocking managed-process/session mode for:
 
 1. **§4 Optuna iteration** — any non-trivial trial budget will exceed 10
-   minutes on datasets larger than a few thousand rows. Always background.
+   minutes on datasets larger than a few thousand rows. Always use a managed
+   process.
 2. **§4.5 Stacking ensemble** — fitting N base learners with 5-fold CV plus
-   a meta-learner can easily exceed 10 minutes. Always background.
+   a meta-learner can easily exceed 10 minutes. Always use a managed process.
 3. **§4.7 AutoGluon comparison** — defaults to a 5- or 15-minute fit budget,
-   which alone meets or exceeds the foreground ceiling. Always background.
+   which alone may meet or exceed a foreground ceiling. Always use a managed
+   process.
 4. **Any other Python invocation** you have reason to believe will run for
    more than ~5 minutes (large model.joblib save, full-dataset SHAP, etc.).
 
 ### How to do it
 
-1. Write the Python script to a file (`artefacts/_optuna_search.py`,
-   `artefacts/_stacking.py`, `artefacts/_autogluon.py`) so the background
-   invocation has something to load.
-2. Invoke via:
-   ```
-   Bash(command=".venv/bin/python artefacts/_optuna_search.py",
-        run_in_background=true,
-        description="Optuna search (background)")
-   ```
-3. The tool returns a task ID. Print a progress header
-   `▶ Step N/11 — <name> (background)` so the user sees it has started.
-4. Poll with `TaskOutput(task_id=..., block=true, timeout=...)` to wait for
-   completion. The Python script should write its results to a known
-   location (e.g. `artefacts/_optuna_result.json`) that you read after the
-   task completes.
-5. On completion, print the closing `✓ Step N/11 done` header with the
-   summary line as usual.
+1. Write the Python entry point to disk (`artefacts/_optuna_search.py`,
+   `artefacts/_stacking.py`, or `artefacts/_autogluon.py`) and make it write
+   results to a known file such as `artefacts/_optuna_result.json`.
+2. Launch it with the host's managed-process mechanism. In Codex, retain the
+   session ID returned by the command runner and poll that session. In Claude
+   Code, use background Bash and poll the returned task ID.
+3. Send `▶ Step N/11 — <name> (background)` when it starts. Poll in bounded
+   intervals so the user receives a progress update at least once per minute.
+4. Read the result file and send the normal `✓ Step N/11 done` summary when
+   the process finishes.
 
 ### What you must NOT do
 
-- Run Optuna, stacking, or AutoGluon as a foreground Bash call. The 10-minute
-  ceiling will kill it and you will be unable to honour the user's chosen
-  time budget. This is a defect.
-- Set `timeout=600000` (or any other shortened value) on the foreground Bash
-  call as a workaround. The fix is background mode, not a shorter timeout.
+- Run Optuna, stacking, or AutoGluon in a blocking foreground call when the
+  host can terminate it before the approved budget.
+- Shorten the ML budget merely to fit a tool-call timeout. Use managed-process
+  mode instead.
 - Decide "this run is small, foreground should be fine." On wine quality
   (5k rows) the previous run hit 7+ minutes in Optuna alone. You cannot
   reliably predict which datasets will fit under 10 minutes — always use
-  background mode for these steps.
+  managed-process mode for these steps.
 
 ### Record what you did
 
-In `config.json`, under each long-running step's block, record
-`execution_mode: "background"` and `task_id: "<id>"`. The compliance
-checklist verifies this.
+In `config.json`, record `execution_mode: "managed_process"` and the host's
+`session_id` or `task_id` when one is available. The compliance checklist
+verifies this.
 
 ## 0) Environment setup (required)
 
@@ -243,17 +234,28 @@ checklist verifies this.
 
 ## 1) Intake and clarification
 
-- Ask the minimum required inputs before training (each item is `[ASK]`):
-  - dataset location(s) (local path(s) or URL(s))
-  - task type
-  - evaluation metric (or accept default — `[DEFAULT]` if user doesn't specify)
-  - split strategy (or accept default — `[SPEC]`, see §3)
+- Resolve the minimum required inputs before training:
+  - `[ASK]` — dataset location(s) (local path(s) or URL(s))
+  - `[ASK]` — task type and target (when supervised)
+  - `[DEFAULT]` — evaluation metric if the user does not specify one
+  - `[SPEC]` — split strategy if the user does not specify one (see §3)
 - `[ASK]` — Ask for time column and any entity/group identifier to choose an
   appropriate split and CV strategy (see `references/defaults.md`).
 - `[DEFAULT]` — Random seed: use 42 unless the user specifies otherwise.
 - `[ASK]` — Task-specific requirements (see `references/defaults.md`).
 - `[ASK]` — Domain-specific feature ideas; confirm whether to apply standard
   feature engineering (date parts, lags, transforms).
+- `[ASK]` — **Inference availability.** Ask the user to name the prediction
+  moment and which columns are known at that moment. Phrase in plain language:
+  > "At the moment you'll actually need a prediction, which columns in this
+  > dataset will already be known? Some columns only get filled in *after* the
+  > event you're predicting (e.g. a final status, a resolution reason, an actual
+  > date). Training on those makes the model look accurate in testing but fail in
+  > production — this is called training-serving skew. Tell me the prediction
+  > moment, and in profiling I'll flag any columns that look like they're only
+  > known afterwards."
+  Record the prediction moment in `config.json` under `inference_trigger`. This
+  answer drives the post-event feature check in §2.5.
 - `[ASK]` — Whether to run explainability (SHAP). Discrete question.
 - `[ASK]` — **Time budget for hyperparameter search.** Phrase as a discrete
   question with the spec default presented:
@@ -272,7 +274,8 @@ checklist verifies this.
   "defaults" list.** Phrase in plain language and default to **No**:
   > "Would you like me to also run AutoGluon (an AutoML system) for a
   > head-to-head comparison against the transparent pipeline? It adds
-  > ~2 GB of install and 5–15 minutes of extra runtime. This is useful if
+  > a large optional dependency set and typically 5–15 minutes of extra
+  > runtime. This is useful if
   > you want to know whether an off-the-shelf AutoML system would produce
   > a better model on this dataset. [y/N]"
   Wait for a Y/N answer before proceeding to step 2. Record the user's
@@ -299,9 +302,20 @@ checklist verifies this.
 
 ## 2.5) Pre-training data profiling
 
-Run this analysis after loading the dataset and before any splitting or
-training. The goal is to configure the training run correctly, not just report
-findings.
+Run profiling in two phases so the holdout remains honest:
+
+1. On the full raw dataset, inspect only schema, shape, target presence, and
+   exact duplicate rows. Resolve duplicate handling, then create and persist
+   the train/validation/holdout assignments using the agreed split strategy.
+2. Compute every data-dependent statistic used to choose features or
+   preprocessing (missingness, variance, correlation, skew, outlier thresholds,
+   class balance, and target association) on the **training partition only**.
+   Never inspect validation or holdout values to decide what to drop, transform,
+   cap, impute, or resample. Apply the frozen decisions to those partitions
+   later through the fitted pipeline.
+
+The goal is to configure the training run correctly without allowing validation
+or holdout data to influence model design.
 
 **Every decision in this section is `[ASK]`.** Each finding gets its own
 plain-language question and waits for the user's response. The "default: yes"
@@ -321,16 +335,17 @@ without explaining them. Example format:
 - Report row/column count.
 - Detect duplicate rows; if found: explain that identical rows can unfairly
   skew the model's learning, recommend dropping, **ask the user before doing
-  so** (default recommendation: yes).
+  so** (default recommendation: yes). Resolve exact duplicates before creating
+  split assignments so copies cannot land in different partitions.
 
 **Missing values** `[ASK]`
-- Report missingness per column (count + %).
+- Report training-partition missingness per column (count + %).
 - Columns > 50% missing: explain that more than half the data is absent so
   filling it in would mean mostly guessing; **ask** whether to drop the column
   or fill it anyway (default recommendation: drop).
-- Columns 20–50% missing: record for median/mode imputation inside the training
-  pipeline — do NOT fill now, before splitting, as that would let test data
-  influence training.
+- For every retained column with missing values, record median/mode (or an
+  approved alternative) imputation inside the fitted pipeline. Do not fill the
+  raw dataset before splitting.
 - Record final imputation strategy per column in `artefacts/config.json`.
 
 **Near-zero variance** `[ASK]`
@@ -341,7 +356,7 @@ without explaining them. Example format:
 - Record dropped columns in `artefacts/config.json`.
 
 **Highly correlated features** `[ASK]`
-- Flag numeric column pairs with |r| > 0.95.
+- On the training partition, flag numeric column pairs with |r| > 0.95.
 - Explain in plain terms: "These two columns contain almost identical
   information. Keeping both is redundant and can confuse the model. I recommend
   keeping [X] and removing [Y] because X has a stronger relationship with what
@@ -350,28 +365,33 @@ without explaining them. Example format:
   `artefacts/config.json`.
 
 **Numeric skew** `[ASK]`
-- Flag columns with |skew| > 1.0.
+- On the training partition, flag columns with |skew| > 1.0.
 - Explain: "This column has a few very large values that could pull the model
-  in the wrong direction. I'll apply a standard adjustment to balance it out
-  (log transformation)." **Ask the user before recording** which columns get
-  log1p transforms in `artefacts/config.json`. Transforms are applied
-  only inside the training pipeline after splitting, to avoid test data
-  influencing training.
+  in the wrong direction. I recommend a transformation fitted on the training
+  data." Use `log1p` only when values are non-negative; otherwise recommend a
+  signed transform such as Yeo-Johnson. **Ask the user before recording** which
+  columns are transformed in `artefacts/config.json`.
 - Record approved transforms in `artefacts/config.json`.
 
 **Outliers** `[ASK]`
-- Flag columns with rows beyond 3 IQRs from the median; report count and %.
+- Derive outlier thresholds from the training partition only. Flag columns with
+  rows beyond 3 IQRs from the median; report count and %.
 - Explain: "X rows in column Y have extreme values that are far outside the
   normal range. These can throw off the model. Options: (1) cap them at a
   sensible limit [recommended] (Winsorization), (2) remove those rows,
   (3) leave them as-is."
 - **Ask the user for a choice** (default recommendation: cap); record decision
   in `artefacts/config.json`.
-- Capping/removal is applied inside the training pipeline after splitting —
-  not on the raw dataset now, to avoid test data influencing training.
+- Capping thresholds are fitted on training data and applied by the pipeline to
+  every partition. If the user chooses row removal, remove rows from the
+  training fold only; never delete validation, holdout, or inference rows.
 
 **Target leakage signals** `[ASK]`
-- Flag features with |correlation to target| > 0.9.
+- On the training partition, flag features with suspiciously strong
+  task-appropriate association to the target. Use |Pearson r| > 0.9 only for
+  numeric feature/numeric target pairs; use suitable categorical or
+  classification association checks for other types. Treat this as a screening
+  heuristic, not proof of leakage.
 - Explain: "The column '[name]' is almost perfectly linked to what we're trying
   to predict. This usually means it was calculated using the answer, which would
   make the model look accurate in testing but fail in real use. I recommend
@@ -379,8 +399,27 @@ without explaining them. Example format:
 - **Ask the user before dropping** (default recommendation: yes); record in
   `artefacts/config.json`.
 
+**Post-event / unavailable-at-inference features** `[ASK]`
+- This catches leakage from the *future* rather than from the target: columns
+  that exist in the training data but won't be observable at the prediction
+  moment (see the `inference_trigger` gathered in §1). Such columns can pass the
+  target-leakage check above yet still cause training-serving skew.
+- Flag columns whose names suggest post-event knowledge: `result`, `outcome`,
+  `status`, `cleared`, `resolved`, `closed`, `final`, `actual`, `settled`,
+  `completion`, `return*`, `refund*`, plus any date/timestamp column that would
+  logically be populated *after* the prediction moment given in §1.
+- If the user supplied a prediction moment in §1, cross-check date/timestamp
+  columns against it and flag those that post-date the trigger.
+- Explain: "The column '[name]' looks like it's only filled in after the thing
+  we're predicting has already happened. If it won't be available when you
+  actually run the model, training on it will make the model look good in testing
+  but fail in real use. Should I exclude it? (this is training-serving skew)"
+- **Ask the user before excluding** (default recommendation: exclude); record
+  excluded columns in `artefacts/config.json` under
+  `feature_handling.inference_unavailable`.
+
 **Class imbalance (classification and supervised anomaly detection)** `[ASK]`
-- Report class distribution in plain terms: e.g. "87% of rows are class A,
+- Report the training-partition class distribution in plain terms: e.g. "87% of rows are class A,
   13% are class B".
 - If minority class < 20%: explain the imbalance will bias the model toward
   the majority class. The `class_weight='balanced'` mitigation is `[DEFAULT]`
@@ -390,6 +429,8 @@ without explaining them. Example format:
   "Would you like me to also artificially generate extra examples of the rare
   class to help the model learn it better? (this technique is called SMOTE)
   [Y/n]"
+- If approved, place SMOTE inside an imbalanced-learn pipeline so it runs only
+  on each training fold. Never resample validation or holdout data.
 
 **Temporal integrity (time series only)** `[ASK]`
 - Check for gaps or irregular frequency in the time column.
@@ -397,12 +438,16 @@ without explaining them. Example format:
   there are 14 missing weeks."
 - **Ask**: "Missing time periods can disrupt forecasting. Should I fill them
   in using the surrounding values, or leave the gaps? [fill in / leave gaps]"
+- If filling is approved, use a causal method that does not read future values
+  across validation or holdout boundaries.
 
 **Profiling summary**
 - After all `[ASK]` questions have been answered, print a concise
   plain-language summary of all findings and decisions.
 - List what was decided (dropped, imputed, transformed, capped, etc.) and
   what the user chose where they overrode the default recommendation.
+- Include any columns excluded because they wouldn't be available at inference
+  time (the post-event / training-serving-skew check above).
 - Only proceed to baseline once all confirmations are resolved.
 
 ## 3) Baseline model (fixed by task — do not substitute)
@@ -431,11 +476,11 @@ small dataset). Do not pick a different ratio silently.
 
 Other rules:
 
-- Split the dataset first (see `references/defaults.md`) into train, validation,
-  and holdout test sets before any fitting:
+- Use the persisted split assignments created during profiling (see
+  `references/defaults.md`):
   - Train: used to fit the baseline model
   - Validation: used to report baseline metrics
-  - Holdout test: set aside now and not touched until final evaluation in step 5
+  - Holdout test: not touched until final evaluation in step 10
 - Use a simple, fixed-configuration pipeline — no hyperparameter search.
 - All preprocessing transforms (imputation, log1p, encoding, scaling) must be
   fit on the training fold only and applied to validation and holdout.
@@ -457,29 +502,37 @@ confidently produce a polished model on a dataset that has nothing to learn from
 
 **How to run it**
 
-- Permute the target column 5 times using different seeds derived from the
+- Permute the training target 20 times using different seeds derived from the
   agreed random seed (e.g. `random_seed + i`).
 - For each permutation, train the same baseline pipeline on the (shuffled-label)
-  training fold and score it on the validation set.
-- Compute the mean and standard deviation of the 5 shuffled scores.
-- Compare the real baseline score to the shuffled distribution.
+  training fold and score it against the **unchanged** validation labels.
+- Compute the mean and standard deviation of the shuffled scores and an
+  empirical one-sided p-value with the +1 correction:
+  `(1 + equally_or_more_extreme_shuffles) / (1 + permutations)`.
+- Compare the real baseline score to the shuffled distribution. Twenty
+  permutations is the minimum needed for an empirical p-value below 0.05.
 
 **Decision rule**
 
-- Higher-is-better metrics (f1, auc, r2, accuracy):
-  - Real baseline ≤ shuffled mean + 2·shuffled std → **no detectable signal**
-  - Otherwise → signal present, proceed to iteration
-- Lower-is-better metrics (rmse, mae, mape):
-  - Real baseline ≥ shuffled mean − 2·shuffled std → **no detectable signal**
-  - Otherwise → signal present, proceed to iteration
+- Higher-is-better metrics: count shuffled scores greater than or equal to the
+  real score.
+- Lower-is-better metrics: count shuffled scores less than or equal to the real
+  score.
+- Empirical p-value > 0.05 → **no detectable signal**.
+- Empirical p-value ≤ 0.05 → signal detected. This establishes statistical
+  evidence of signal, not business usefulness; report the effect size as well.
 
 **When this step is replaced (not skipped)**
 
-- Unsupervised anomaly detection: replace with a comparison against random
-  scoring (no labels to shuffle).
-- Time-series forecasting: replace with a comparison against a naive-forecast
-  baseline (last-value or seasonal naive). Only proceed if the real baseline
-  beats the naive forecast by a non-trivial margin.
+- Unsupervised anomaly detection: without labels, do **not** claim a
+  random-baseline signal test is possible. Replace it with score-stability
+  checks across seeds plus a user/domain review of the top-k anomalies. Record
+  the result as a diagnostic, not proof of predictive signal.
+- Time-series forecasting: the fixed baseline is already last-value or seasonal
+  naive. Fit a simple, fixed autoregressive probe on the training partition
+  (for example, Ridge on approved lag features) and compare it with the naive
+  forecast on validation. Proceed only if the probe improves by a
+  user-relevant margin, or if the user explicitly overrides the gate.
 
 In both cases the result of the replacement check **must still be recorded in
 `metrics.json`** under the `signal_check` key.
@@ -488,8 +541,9 @@ In both cases the result of the replacement check **must still be recorded in
 
 - Halt iteration. Do **not** run Optuna.
 - Report the finding in plain language. Example:
-  > "I ran 5 sanity checks where the answers were randomly shuffled. Our
-  > baseline scored 0.51 on the real data and 0.49 ± 0.02 on shuffled data.
+  > "I ran 20 sanity checks where the answers were randomly shuffled. Our
+  > baseline scored 0.51 on the real data and 0.49 ± 0.02 on shuffled data
+  > (empirical p = 0.14).
   > This means the model can barely tell the real labels apart from random
   > ones — the features in this dataset don't contain enough information to
   > predict the target. Continuing would produce a model that looks plausible
@@ -505,19 +559,26 @@ In both cases the result of the replacement check **must still be recorded in
 Whether signal is detected or not, populate `signal_check` in
 `artefacts/metrics.json` with: `ran` (bool), `permutations` (int),
 `real_baseline_score` (float), `shuffled_mean` (float), `shuffled_std` (float),
-`signal_detected` (bool), `user_overrode_no_signal` (bool, default false).
+`empirical_p_value` (float or null for replacement diagnostics),
+`signal_detected` (bool or null when labels are unavailable),
+`effect_size` (float or null), and `user_overrode_no_signal` (bool, default
+false).
 
 ## 4) Iteration
 
-**Execution mode:** Optuna trials must run in **background mode** (see
-"Long-running steps must run in background mode" above). The foreground
-Bash ceiling is 10 minutes; foreground will silently kill long runs.
+**Execution mode:** Run Optuna through the host's managed-process mode (see
+"Long-running steps must use the host's managed-process mode" above).
 
 - Use **Optuna with TPESampler** as the hyperparameter optimizer. Install into
   venv if needed (`optuna`).
 - Seed TPESampler with the agreed random seed:
   `optuna.samplers.TPESampler(seed=random_seed)` — required for reproducibility.
 - Define a search space per model and let Optuna suggest parameters each trial.
+- Define metric direction once (`maximize` or `minimize`) and use it
+  consistently for Optuna, relative-gain calculations, stacking acceptance,
+  and ceiling diagnostics. For relative change, divide by
+  `max(abs(reference_score), epsilon)` so zero or negative scores such as R²
+  are handled safely.
 - Each Optuna trial is evaluated on the validation set only — the holdout test
   set is never used during optimization.
 - **CV strategy per trial:**
@@ -547,7 +608,8 @@ Bash ceiling is 10 minutes; foreground will silently kill long runs.
   search spaces (1–3 hyperparameters each) so these don't dominate the
   Optuna budget — their purpose is stacking diversity, not winning solo.
 - Expand feature engineering if it improves the metric and does not introduce
-  leakage.
+  leakage (for time-based features this means lag ≥ 1 and shift-before-roll; see
+  `references/defaults.md`).
 - Use the agreed metric to pick the best model.
 - Log progress every 10 trials: trial number, best score so far, current score.
 - Keep a clear audit trail in `artefacts/config.json`. Record the actual
@@ -556,18 +618,16 @@ Bash ceiling is 10 minutes; foreground will silently kill long runs.
 
 ## 4.5) Stacking ensemble — REQUIRED to attempt for classification and regression
 
-**Execution mode:** Stacking must run in **background mode** (see
-"Long-running steps must run in background mode" above). Fitting N base
-learners with 5-fold CV plus a meta-learner can easily exceed 10 minutes.
+**Execution mode:** Run stacking through the host's managed-process mode.
 
 **For classification and regression, you MUST attempt this step after Optuna
 converges.** Skipping it silently — when none of the explicit "skip when"
 conditions apply — is a defect. If `stacking` is missing from `metrics.json`
 at the end of a classification/regression run, the run is incomplete.
 
-On tabular problems, stacking typically adds 1–3% on the chosen metric over
-the single best model and rarely loses. The acceptance rule below ensures
-you only adopt the ensemble when it actually helps.
+Stacking can help when model families make complementary errors. The
+acceptance rule below keeps it only when it improves the agreed validation
+metric.
 
 **Explicit skip conditions (record the reason in `metrics.json` if any apply)**
 
@@ -584,9 +644,9 @@ silently omit the key.
 
 **How to build it**
 
-- Select the top model from each distinct model family that finished within
-  10% of the best validation score (e.g. LightGBM best + XGBoost best +
-  RandomForest best). Cap at 5 base learners.
+- Select the top model from each distinct model family whose direction-aware
+  validation utility finished within 10% of the best (e.g. LightGBM best +
+  XGBoost best + RandomForest best). Cap at 5 base learners.
 - Generate out-of-fold predictions for each base learner using 5-fold CV on
   the training fold only (or 5 walk-forward folds for time-aware data).
 - Train a simple meta-learner on the stacked out-of-fold predictions:
@@ -601,8 +661,10 @@ silently omit the key.
 
 - Score the stacked ensemble on the validation set.
 - Adopt the ensemble only if it beats the single best model by ≥ 0.5%
-  relative on the chosen metric. Otherwise keep the single best model and
-  record that stacking was tried but rejected.
+  direction-aware relative gain on the chosen metric. Otherwise keep the
+  single best model and record that stacking was tried but rejected. Treat
+  this as a validation-set selection rule, not proof that the gain will
+  generalize.
 
 **Time budget** `[SPEC]`
 
@@ -623,11 +685,12 @@ or null if skipped), `adopted` (bool), `reason` (string explaining adopt /
 reject / skip), `time_limit_seconds_used` (int or null if unlimited),
 `time_limit_source` (one of "spec_unlimited", "user_override").
 
-## 4.6) Ceiling check — diagnose whether more compute would help
+## 4.6) Search-plateau check — diagnose whether more trials would help
 
-After stacking is resolved, decide whether the dataset is **near its predictive
-ceiling**. This is what tells the user "more trials won't help — you need
-different data" instead of leaving them to guess.
+After stacking is resolved, estimate whether the explored model families have
+plateaued. Keep the existing `ceiling_check` schema for compatibility, but
+treat it as a heuristic about this search space—not proof of the dataset's
+theoretical predictive ceiling.
 
 **How to decide**
 
@@ -660,23 +723,21 @@ plain-language note like:
 > to improve the result. This dataset appears to be near its predictive
 > ceiling for these features; running more trials or trying more models is
 > unlikely to help. Better gains will come from new features or a different
-> target definition (see 'What to try next' below)."
+  > target definition (see 'What to try next' below). This is a search-plateau
+  > heuristic, not proof that no other modeling approach can improve."
 
 ## 4.7) AutoGluon comparison (opt-in)
 
-**Execution mode:** AutoGluon must run in **background mode** (see
-"Long-running steps must run in background mode" above). Default budget
-is 5–15 minutes, which meets or exceeds the foreground ceiling.
+**Execution mode:** Run AutoGluon through the host's managed-process mode.
 
 Run this step **only if the user opted in** during intake
 (`comparison.autogluon == true`). The purpose is a fair head-to-head: how
 does the transparent pipeline compare to an off-the-shelf AutoML system on
 this exact dataset?
 
-This is co-existence, not competition. AutoGluon produces its own model and
-its own score, on the same data, with the same split. Both models are saved.
-The user sees both. The skill does not pick a "winner" — it reports the gap
-and lets the user decide.
+AutoGluon produces its own candidate on the same split. Both models are saved
+and the user sees both. The skill reports the comparison without silently
+replacing the transparent pipeline.
 
 **Skip without asking when**
 
@@ -692,76 +753,86 @@ in `metrics.json`. Do not silently omit the section.
 **Install**
 
 - Install `autogluon.tabular` into the venv only if not already present.
-  This is large (~2 GB) — the user has already opted in at intake, but if
+  This has a large dependency footprint — the user has already opted in at
+  intake, but if
   install fails (disk space, network), record `autogluon.attempted = false`
   and `autogluon.reason = "install failed: <error>"` and continue with the
   main pipeline result. Do not halt the run.
 
 **How to run it**
 
-- Use the **same `train + validation` data** that the main pipeline uses for
-  Optuna optimization. Use the **same untouched holdout set** for final
-  evaluation. This guarantees a fair comparison.
+- Use the same training and validation boundaries as the main pipeline. Let
+  AutoGluon fit on training data and tune/select on validation data (using
+  `tuning_data` or the version-equivalent mechanism). Do not merge training and
+  validation before candidate selection.
 - Construct `TabularPredictor(label=<target>, eval_metric=<metric>, path=...)`
   using the user's chosen metric.
-- Call `predictor.fit(train_data, time_limit=<budget_seconds>, presets="medium_quality")`.
+- Call
+  `predictor.fit(train_data, tuning_data=validation_data, time_limit=<budget_seconds>, presets="medium_quality")`
+  when supported by the installed AutoGluon version; otherwise use its
+  equivalent explicit validation mechanism.
 - Default budget: **5 minutes** (300 s) for datasets < 100k rows; 15 minutes
   (900 s) for larger datasets. Pass these as `time_limit`. The presets
-  `"medium_quality"` is the right default — `"best_quality"` runs much longer
-  and uses more compute than the comparison warrants.
-- Score the resulting predictor on the holdout set with the same metric the
-  main pipeline uses. Record both predictions and the score.
+  `"medium_quality"` is the default — `"best_quality"` runs much longer and
+  uses more compute than this comparison warrants.
+- Compare the main pipeline and AutoGluon on validation before looking at the
+  holdout. After both candidates are finalized, refit each on
+  training+validation where supported and score each once on the untouched
+  holdout with the same metric.
+- If the user uses the holdout result to choose between the two candidates,
+  state that the holdout has become a benchmark-selection set; a new external
+  or future test set is then required for an unbiased estimate of the selected
+  model.
 
 **Record in `metrics.json`**
 
 Populate `autogluon` with: `attempted` (bool), `reason` (string if not
 attempted), `time_limit_seconds` (int), `preset` (string),
-`holdout_score` (float), `holdout_score_vs_main_pct` (float, relative
-difference: positive means AutoGluon better).
+`validation_score` (float), `validation_score_vs_main_pct` (float),
+`holdout_score` (float), and `holdout_score_vs_main_pct` (float). Compute
+relative differences in the correct metric direction.
 
 **Reflect in `results.md`**
 
 Add an "AutoML comparison" section under "Best model":
 > "**AutoML comparison.** AutoGluon (medium_quality preset, 5 min budget)
-> scored 0.881 AUC on the same holdout set, compared to 0.875 from our
-> transparent pipeline — a gap of +0.7% in AutoGluon's favour.
+> scored 0.879 AUC on validation, compared with 0.875 from our transparent
+> pipeline. After both candidates were finalized, their one-time holdout
+> scores were 0.881 and 0.878 respectively.
 >
-> If you want the strongest possible model and don't need transparency,
-> consider using AutoGluon directly. If you want a reproducible, inspectable
-> pipeline with comparable performance, the transparent model is a good
-> choice."
+> The validation gap is small. Prefer the transparent pipeline when
+> inspectability and a compact dependency set matter; consider AutoGluon when
+> the measured quality gain justifies its serving requirements."
 
-If AutoGluon scored within 1% of the main pipeline, say so plainly:
-> "Within margin of error — the transparent pipeline is competitive with
-> off-the-shelf AutoML on this dataset."
+If the observed validation gap is within 1%, call it a **small observed gap**,
+not "within margin of error" unless an uncertainty interval or repeated
+evaluation supports that claim:
+> "The observed validation gap is small; this single split does not establish
+> statistical equivalence."
 
-If AutoGluon was meaningfully better (>3%), say so equally plainly:
+If AutoGluon was more than 3% better, call it a **large observed gap** and
+still require holdout or future-data confirmation:
 > "AutoGluon outperformed the transparent pipeline by 3.4% on this dataset.
-> The most likely reason is its diverse model zoo (neural nets, fastai
-> tabular) which our pipeline does not include."
+> One possible reason is its broader model zoo, which can include families not
+> present in the transparent pipeline."
 
-**Always include the deployment-cost callout**
+**Always include a deployment-cost comparison**
 
-Regardless of the score gap, every AutoML comparison section in
-`results.md` must end with this deployment trade-off paragraph (substitute
-the actual numbers from this run where you have them, otherwise use the
-order-of-magnitude defaults):
+Report measured facts from the current environment where practical:
 
-> "**Deployment trade-off.** AutoGluon needs roughly **10–50× more memory**
-> and **40× longer per-prediction** than the transparent pipeline at
-> inference time. If you intend to serve predictions via a real-time API,
-> a serverless function (AWS Lambda, Cloud Functions, Cloudflare Workers),
-> an edge device, or any high-throughput batch pipeline, AutoGluon is
-> likely too heavy — the transparent pipeline's lower latency and smaller
-> footprint will save more than the AutoML lift is worth. AutoGluon is the
-> right choice when the model will be served from a long-running container
-> with generous memory and latency tolerance, and the score gap is
-> meaningfully above 1%."
+- serialized artifact size for both candidates;
+- median and p95 warm inference latency at batch size 1 and one representative
+  batch size, after warm-up;
+- cold-start time and peak resident memory when a reliable local measurement
+  is available;
+- required runtime and key dependencies.
 
-This callout is mandatory because the score gap alone is misleading —
-users typically only see a percentage and don't consider the operational
-cost. The deployment trade-off is what determines whether AutoGluon is
-actually usable for a given application.
+Record the hardware, software versions, sample size, batch size, and warm-up
+method. Do not present hard-coded latency or memory multipliers as universal
+facts. If a dimension was not measured, label it "not measured" and describe
+the qualitative packaging difference only. Serverless and edge compatibility
+depends on the target runtime, package limits, native libraries, and sometimes
+model conversion; do not claim deployability from model family alone.
 
 **Save the AutoGluon model**
 
@@ -786,12 +857,18 @@ Before telling the user the run is complete, verify every item below. If any
 item is unchecked, the run is incomplete — finish the missing step, do not
 hand off a partial run.
 
-- [ ] Progress reporting: `TodoWrite` list was used, and `▶ / ✓` step headers
-      were printed for every step.
+- [ ] Progress reporting: the host task-list tool was used when available, and
+      `▶ / ✓` step headers were sent for every step.
 - [ ] Profiling decisions recorded in `config.json` (dropped columns,
       imputation strategy, transforms, outlier handling).
+- [ ] **Inference availability** was addressed: the intake question was asked,
+      `config.json.inference_trigger` records the prediction moment, and any
+      columns excluded because they wouldn't exist at prediction time are
+      recorded in `config.json` under `feature_handling.inference_unavailable`
+      (an empty list is valid if none apply).
 - [ ] **Signal check** ran and the result is recorded in `metrics.json`
-      under `signal_check` (real score, shuffled mean and std, verdict).
+      under `signal_check` (real score, shuffled distribution, empirical
+      p-value, effect size, and verdict).
       For unsupervised or time-series tasks, the replacement check ran and
       its result is recorded.
 - [ ] If signal was not detected, the user was asked whether to proceed and
@@ -819,6 +896,7 @@ hand off a partial run.
 - [ ] **AutoGluon comparison**: if the user opted in at intake
       (`config.json.comparison.autogluon == true`), the comparison ran and
       `autogluon` is populated in `metrics.json` with `attempted` (bool),
+      `validation_score` (float or null),
       `holdout_score` (float or null if skipped),
       `holdout_score_vs_main_pct` (float or null), and `reason` (string
       explaining any skip). The `autogluon_predictor/` directory exists if
@@ -829,13 +907,11 @@ hand off a partial run.
 - [ ] `model.joblib`, `train.py`, `infer.py`, `metrics.json`, `config.json`,
       and `results.md` all exist (unless the run halted at the no-signal gate,
       in which case `metrics.json` and `config.json` still exist).
-- [ ] **Background execution**: Optuna, stacking, and (if opted in)
-      AutoGluon were each invoked via `Bash(run_in_background=true)` and
-      polled with `TaskOutput`. `config.json` records
-      `execution_mode: "background"` and the `task_id` for each. Any of
-      these steps run in foreground mode is a defect, because the 10-minute
-      Bash ceiling would have prevented the user's chosen time budget from
-      being honoured.
+- [ ] **Managed execution**: Optuna, stacking, and (if opted in) AutoGluon
+      used the host's managed-process/session mechanism and were polled to
+      completion. `config.json` records
+      `execution_mode: "managed_process"` and the host session/task ID when
+      available.
 - [ ] Plain-language `results.md` written, including the signal-check verdict,
       stacking outcome, ceiling-check verdict, AutoML comparison (only if the
       user opted in), a "What to try next" section tailored to the run, and a

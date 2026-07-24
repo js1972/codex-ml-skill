@@ -51,10 +51,12 @@ Also write `results.md` in the project root with a concise final summary.
   },
   "signal_check": {
     "ran": true,
-    "permutations": 5,
+    "permutations": 20,
     "real_baseline_score": 0.72,
     "shuffled_mean": 0.49,
     "shuffled_std": 0.02,
+    "empirical_p_value": 0.0476,
+    "effect_size": 0.23,
     "signal_detected": true,
     "user_overrode_no_signal": false
   },
@@ -68,8 +70,8 @@ Also write `results.md` in the project root with a concise final summary.
     "reason": "ensemble beat best single by 2.5%",
     "time_limit_seconds_used": null,
     "time_limit_source": "spec_unlimited",
-    "execution_mode": "background",
-    "task_id": "bash-task-def456"
+    "execution_mode": "managed_process",
+    "task_or_session_id": "host-process-def456"
   },
   "ceiling_check": {
     "near_ceiling": false,
@@ -82,10 +84,12 @@ Also write `results.md` in the project root with a concise final summary.
     "reason": null,
     "time_limit_seconds": 300,
     "preset": "medium_quality",
+    "validation_score": 0.879,
+    "validation_score_vs_main_pct": 0.0046,
     "holdout_score": 0.881,
     "holdout_score_vs_main_pct": 0.007,
-    "execution_mode": "background",
-    "task_id": "bash-task-ghi789"
+    "execution_mode": "managed_process",
+    "task_or_session_id": "host-process-ghi789"
   },
   "final": {
     "score": 0.81,
@@ -111,6 +115,7 @@ Also write `results.md` in the project root with a concise final summary.
   "task_type": "classification",
   "target": "label",
   "target_derivation": null,
+  "inference_trigger": "when an invoice is issued, before it is paid",
   "metric": "f1_macro",
   "splits": {
     "strategy": "random_80_10_10",
@@ -133,8 +138,8 @@ Also write `results.md` in the project root with a concise final summary.
     "sampler": "TPESampler",
     "seed": 42,
     "cv_folds": null,
-    "execution_mode": "background",
-    "task_id": "bash-task-abc123"
+    "execution_mode": "managed_process",
+    "task_or_session_id": "host-process-abc123"
   },
   "environment": {
     "venv_path": ".venv",
@@ -161,6 +166,7 @@ Also write `results.md` in the project root with a concise final summary.
   },
   "feature_handling": {
     "excluded": [],
+    "inference_unavailable": [],
     "missing_values": {
       "numeric": "median",
       "categorical": "mode"
@@ -175,8 +181,8 @@ Also write `results.md` in the project root with a concise final summary.
   },
   "signal_check": {
     "enabled": true,
-    "permutations": 5,
-    "threshold_stds": 2
+    "permutations": 20,
+    "empirical_alpha": 0.05
   },
   "stacking": {
     "enabled": true,
@@ -204,14 +210,17 @@ Also write `results.md` in the project root with a concise final summary.
 
 ## Profiling decisions
 - Dropped columns: [list any dropped and why]
+- Excluded (unavailable at inference): [columns removed because they wouldn't
+  exist at the prediction moment — training-serving skew; empty if none]
 - Imputed columns: [list strategy per column]
 - Transforms applied in pipeline: [e.g., log1p on amount]
 - Outlier handling: [e.g., capped at 1st/99th percentile for column X]
 
 ## Signal check
 - Real baseline: 0.72 (validation)
-- Shuffled-label baselines: 0.49 ± 0.02 (5 permutations)
-- Verdict: signal detected — proceeded to iteration
+- Shuffled-label baselines: 0.49 ± 0.02 (20 permutations)
+- Empirical p-value: 0.0476; effect size: +0.23 AUC
+- Verdict: statistical signal detected — proceeded to iteration
 - What this means: the model is clearly learning something real from the
   features, not just memorising noise.
 
@@ -231,30 +240,34 @@ did not opt in, omit the section entirely. If they opted in but the run
 was skipped (small data, install failure, time-series task), include the
 section briefly stating why.
 
-- AutoGluon score: AUC = 0.881 (same holdout, medium_quality preset, 5 min budget)
-- Transparent pipeline score: AUC = 0.875 (same holdout)
-- Gap: +0.7% in AutoGluon's favour (within margin of error)
-- Verdict: "Within margin of error — the transparent pipeline is competitive
-  with off-the-shelf AutoML on this dataset. Use the transparent pipeline if
-  you value inspectability; use AutoGluon if you only care about the score."
+- Validation: AutoGluon AUC = 0.879; transparent pipeline AUC = 0.875
+- One-time holdout benchmark: AutoGluon AUC = 0.881; transparent pipeline
+  AUC = 0.878
+- Validation gap: +0.5% in AutoGluon's favour (small observed gap)
+- Verdict: "The observed validation gap is small, but this single split does
+  not establish statistical equivalence. Use the transparent pipeline if you
+  value inspectability; consider AutoGluon if the measured lift is confirmed
+  and justifies its serving requirements."
 
-(Adjust the verdict per the bands in SKILL.md §4.7: within 1% → "competitive";
-1–3% → "small but real gap"; >3% → "AutoGluon meaningfully better, consider
-its diverse model zoo".)
+(Adjust the descriptive band per SKILL.md §4.7: within 1% → "small observed
+gap"; 1–3% → "moderate observed gap"; >3% → "large observed gap". Do not use
+"margin of error" without an uncertainty estimate.)
 
-**Deployment trade-off** (mandatory — include this paragraph verbatim
-or with the actual numbers from this run):
+**Deployment trade-off** (mandatory; use measured values, not universal
+multipliers):
 
-> AutoGluon needs roughly **10–50× more memory** and **~40× longer
-> per-prediction** than the transparent pipeline at inference time. If
-> you plan to serve predictions via a real-time API, a serverless function
-> (AWS Lambda, Cloud Functions, Cloudflare Workers), an edge device, or
-> high-throughput batch pipeline, AutoGluon is likely too heavy — the
-> transparent pipeline's lower latency and smaller footprint will save
-> more than the AutoML lift is worth. AutoGluon is the right choice when
-> the model will be served from a long-running container with generous
-> memory and latency tolerance, and the score gap is meaningfully above
-> 1%.
+| Measurement | Transparent pipeline | AutoGluon | Test context |
+|---|---:|---:|---|
+| Artifact size | 84 MB | 1.2 GB | Serialized output on disk |
+| Warm latency, batch 1 (median / p95) | 4 / 7 ms | 61 / 88 ms | 100 runs after 10 warm-ups |
+| Warm latency, batch 1,000 | 120 ms | 410 ms | Same host |
+| Cold start | not measured | not measured | — |
+| Peak RSS | not measured | not measured | — |
+
+State the host, CPU/GPU, package versions, sample size, and timing method.
+Label unmeasured dimensions explicitly. Explain that serverless or edge
+compatibility depends on the target runtime, package limits, native libraries,
+and possible model conversion.
 
 Inference with the AutoGluon model:
 ```bash
@@ -263,7 +276,7 @@ python -c "from autogluon.tabular import TabularPredictor; \
   print(p.predict(...))"
 ```
 
-## Ceiling check
+## Search-plateau check
 - Top-3 family validation spread: 1.8% relative (LightGBM 0.89, XGBoost 0.88,
   RandomForest 0.875)
 - Baseline → best gain: 7.2% relative
@@ -272,9 +285,10 @@ python -c "from autogluon.tabular import TabularPredictor; \
   margin.
 
 (If `near_ceiling = true`, replace the verdict with the plain-language
-explanation from SKILL.md §4.6 — e.g. "All families clustered within ~1%
-and stacking did not help; further trials are unlikely to improve this
-score.")
+explanation from SKILL.md §4.6 — e.g. "All explored families clustered within
+~1% and stacking did not help; further trials in this search space are unlikely
+to improve this score. This is not proof of the dataset's theoretical
+ceiling.")
 
 ## Training process
 - Split: random 80/10/10 (train/validation/holdout), stratified
@@ -342,9 +356,9 @@ This dataset does not contain enough signal to predict the target reliably.
 
 ## Signal check
 - Real baseline: 0.51 (validation)
-- Shuffled-label baselines: 0.49 ± 0.02 (5 permutations)
-- The real baseline is within 2 standard deviations of random — the features
-  cannot reliably distinguish real labels from shuffled ones.
+- Shuffled-label baselines: 0.49 ± 0.02 (20 permutations)
+- Empirical p-value: 0.14
+- The permutation test did not detect reliable signal at α = 0.05.
 
 ## What to try instead
 - Collect more or different features for each row.

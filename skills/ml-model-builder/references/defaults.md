@@ -102,6 +102,10 @@ more validation data") are not valid grounds for deviation.
 
 ## Split and CV Guidance
 
+- Resolve exact duplicates before splitting, then persist split assignments.
+- Compute feature-selection and preprocessing statistics on the training
+  partition only. Validation and holdout data must not influence thresholds,
+  feature drops, transforms, resampling, or hyperparameters.
 - Use time-based splits when the target depends on future values or when the
   data is naturally ordered (finance, forecasting, operational logs).
 - For time series, prefer walk-forward or expanding-window validation
@@ -151,8 +155,7 @@ a shorter timeout on your own initiative** (see SKILL.md "Spec discipline").
 
 ## Reproducibility
 
-- Default random seed: 42 `[DEFAULT]` (ask the user first; use default if not
-  provided).
+- Default random seed: 42 `[DEFAULT]` (use it unless the user provides one).
 - The seed must be applied **everywhere a stochastic decision is made**, not
   just to Optuna. Concretely:
   - `random.seed(random_seed)` at process start.
@@ -166,10 +169,11 @@ a shorter timeout on your own initiative** (see SKILL.md "Spec discipline").
   - `random_state=random_seed` (or library equivalent) passed to XGBoost
     (`random_state`), LightGBM (`random_state`), and CatBoost (`random_seed`).
   - `optuna.samplers.TPESampler(seed=random_seed)`.
-- A run with the same seed, data, and config must produce identical results.
-  If you see >0.5 percentage-point drift across re-runs with the same seed,
-  a stochastic component is unseeded — find it and fix it before reporting
-  the run as complete.
+- Aim for repeatability in the same software/hardware environment, but do not
+  promise bit-for-bit identity: threaded numerical libraries, GPU kernels, and
+  third-party estimators can remain nondeterministic. Record package versions,
+  hardware/runtime details, thread settings, and known nondeterministic
+  components. Investigate material drift before reporting the run complete.
 
 ## Leakage Guard
 
@@ -187,10 +191,17 @@ a shorter timeout on your own initiative** (see SKILL.md "Spec discipline").
   - Keep time-based splits; do not use future-derived features.
 - Time series:
   - Create lag features for target and key covariates (e.g., 1, 2, 3, 7, 14).
-  - Add rolling stats on past windows (mean, std, min, max).
+    **All lags must be ≥ 1 period — never lag 0 (the current row's own value),
+    which would leak the answer.**
+  - Add rolling stats on past windows (mean, std, min, max). **Rolling windows
+    must be computed on already-shifted values (`.shift(1)` before `.rolling()`)
+    so the current row is never included in its own aggregate.** Including the
+    current row is look-ahead leakage.
   - Align window sizes to data frequency when known.
 - Numeric:
   - Log1p transform for heavily skewed positives (fit inside training fold only).
+  - Use a signed transform such as Yeo-Johnson when skewed values include
+    negatives; never apply `log1p` outside its valid domain.
   - Standardize for linear models and distance-based methods.
 - Categorical:
   - One-hot encode by default.
@@ -255,15 +266,18 @@ Do not recommend LLMs for:
 Before running Optuna, verify the dataset actually contains predictive signal
 by comparing the real baseline to baselines trained on label-shuffled data.
 
-- Permutations: 5 shuffles, seeded as `random_seed + i` for i in 0..4
-- Decision threshold: signal is "not detectable" if the real baseline score
-  is within 2 standard deviations of the shuffled mean (higher-is-better: real
-  ≤ mean + 2·std → no signal; lower-is-better: real ≥ mean − 2·std → no signal).
-- Skip for:
-  - Unsupervised anomaly detection (no labels to shuffle).
-  - Time-series forecasting (shuffling destroys temporal structure) — instead
-    require the real baseline to beat a naive forecast (last-value or seasonal
-    naive) by a non-trivial margin.
+- Permutations: 20 shuffles, seeded as `random_seed + i` for i in 0..19.
+- Decision threshold: calculate the one-sided empirical p-value with a +1
+  correction. Signal is not detectable when p > 0.05. Also report the
+  direction-aware effect size; statistical evidence alone does not establish
+  business usefulness.
+- Replacements:
+  - Unsupervised anomaly detection: labels are unavailable, so do not claim a
+    random-baseline signal test. Check score/ranking stability across seeds and
+    ask for user/domain review of top-ranked anomalies.
+  - Time-series forecasting: compare a fixed autoregressive probe with the
+    last-value or seasonal-naive baseline on validation. Require a
+    user-relevant improvement or an explicit override.
 - On "no signal": halt iteration by default. Ask whether to (a) stop, or
   (b) proceed anyway. Always record the result in `metrics.json`.
 
@@ -275,15 +289,17 @@ models.
 - Eligible tasks: classification, regression. Skip for time series and anomaly
   detection.
 - Base learner selection: top model per distinct family (e.g. LightGBM, XGBoost,
-  CatBoost, RandomForest, HistGradientBoosting) whose validation score is within
-  10% of the overall best. Cap at 5 base learners. Require at least 3 distinct
-  families to attempt stacking.
+  CatBoost, RandomForest, HistGradientBoosting) whose direction-aware validation
+  utility is within 10% of the overall best. Cap at 5 base learners. Require at
+  least 3 distinct families to attempt stacking.
 - Out-of-fold predictions: 5-fold CV on the training fold only; preprocessing
   re-fit inside each fold.
 - Meta-learner:
   - Classification: `LogisticRegression(class_weight='balanced')`
   - Regression: `Ridge`
 - Acceptance: adopt the ensemble only if it beats the single best model by
-  ≥ 0.5% relative on the chosen metric. Otherwise keep the single best model.
+  ≥ 0.5% direction-aware relative gain on the chosen metric. Divide by
+  `max(abs(reference_score), epsilon)` so zero and negative metrics are safe.
+  Otherwise keep the single best model.
 - Record attempt, base learners, meta-learner, ensemble score, and adoption
   decision in `metrics.json` and `config.json`.

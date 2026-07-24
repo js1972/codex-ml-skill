@@ -16,7 +16,9 @@ Clarifications:
 - Confirm merge strategy for the two files (default: concat with
   `dataset_source` column).
 - Confirm derived target rule: `is_high_quality = quality >= 7`.
-- Confirm split strategy (default: random 80/20 with stratification).
+- Confirm split strategy (default: random 80/10/10 with stratification).
+- Ask when the prediction will be made and confirm which wine measurements are
+  available at that moment.
 
 ## Example 2: Journal entry anomaly detection
 
@@ -29,6 +31,8 @@ Clarifications:
 - Ask if a label column exists for anomalies. If yes, treat as supervised.
 - If no label, confirm unsupervised and use contamination=0.05 by default.
 - Ask for entity/time columns if present.
+- Ask when the anomaly score will be generated and exclude any fields posted
+  only after an investigation closes.
 
 ## Example 3: Payment delay forecasting
 
@@ -43,3 +47,6 @@ Clarifications:
 - Confirm time column for split: `NetDueDate`.
 - Ask if the goal is per-invoice regression or aggregated time-series
   forecasting (default: per-invoice regression with time-based split).
+- Confirm the prediction moment. If predicting before payment, use
+  `ClearingDate` to derive the target but exclude it from model features because
+  it is unavailable at inference time.
