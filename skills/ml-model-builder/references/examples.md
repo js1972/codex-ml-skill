@@ -1,52 +1,70 @@
-# Example Prompts and Expected Clarifications
+# Example Routes and Clarifications
 
-Use these examples to guide the clarification flow and defaults.
+## Contents
 
-## Example 1: Wine quality classification
+- [Analysis only](#analysis-only)
+- [Classification](#classification)
+- [Regression](#regression)
+- [Forecasting](#forecasting)
+- [Anomaly detection](#anomaly-detection)
+- [Model improvement](#model-improvement)
 
-Prompt:
-Wine quality classification. Using the classic wine dataset located at:
-- data/winequality-red.csv
-- data/winequality-white.csv
-Train a binary classifier to determine high quality wines. Treat quality >= 7
-as high quality (column name is `quality`). Use AUC as the model evaluation
-metric.
+## Analysis only
 
-Clarifications:
-- Confirm merge strategy for the two files (default: concat with
-  `dataset_source` column).
-- Confirm derived target rule: `is_high_quality = quality >= 7`.
-- Confirm split strategy (default: random 80/10/10 with stratification).
-- Ask when the prediction will be made and confirm which wine measurements are
-  available at that moment.
+**Request:** “Help me understand `customers.parquet`. Show useful charts and
+things I should worry about.”
 
-## Example 2: Journal entry anomaly detection
+Clarify whether any column is a target. Run
+analysis-only mode on all permitted data. Produce the EDA artifacts; do not
+invent a model, holdout or predictive conclusion.
 
-Prompt:
-Anomaly detection over finance journal entries. Dataset is located at
-data/journal entries with 5 percent injected anomalies.csv
-and is a dummy dataset with 5 percent injected anomalies.
+## Classification
 
-Clarifications:
-- Ask if a label column exists for anomalies. If yes, treat as supervised.
-- If no label, confirm unsupervised and use contamination=0.05 by default.
-- Ask for entity/time columns if present.
-- Ask when the anomaly score will be generated and exclude any fields posted
-  only after an investigation closes.
+**Request:** “Predict which invoices will be paid late.”
 
-## Example 3: Payment delay forecasting
+Clarify:
 
-Prompt:
-Payment delay forecasting with dataset located at
-data/accounts receivable entries.csv. Use a time-based
-split. Column `NetDueDate` is when payment was due and `ClearingDate` is when it
-was actually paid.
+- exact prediction moment;
+- when a payment becomes “late” and label maturity;
+- customer grouping and invoice time;
+- weekly review capacity or false-positive/false-negative costs;
+- post-payment fields to exclude.
 
-Clarifications:
-- Confirm target derivation: `delay_days = ClearingDate - NetDueDate`.
-- Confirm time column for split: `NetDueDate`.
-- Ask if the goal is per-invoice regression or aggregated time-series
-  forecasting (default: per-invoice regression with time-based split).
-- Confirm the prediction moment. If predicting before payment, use
-  `ClearingDate` to derive the target but exclude it from model features because
-  it is unavailable at inference time.
+Prefer grouped-temporal validation. Use PR-AUC/recall-at-capacity when late
+payments are rare, select the operational threshold on validation and report
+calibration.
+
+## Regression
+
+**Request:** “Predict delivery duration in days.”
+
+Clarify order-time prediction, cancellation/censoring, route/carrier grouping,
+error asymmetry and whether intervals are needed. Compare MAE/RMSE with
+median/mean baselines; inspect residuals by route, carrier and time.
+
+## Forecasting
+
+**Request:** “Forecast weekly demand for each store for the next eight weeks.”
+
+Clarify horizon, weekly calendar, store/product hierarchy, known promotions,
+new stores and stockout-censored demand. Use rolling-origin panel backtests,
+seasonal-naive baselines, horizon-level metrics and interval coverage.
+
+## Anomaly detection
+
+**Request:** “Find suspicious journal entries; about 5% were synthetically
+injected.”
+
+Clarify whether real labels exist and how many entries can be reviewed. Treat
+synthetic anomalies as a limited sanity check. For unlabeled production data,
+report rank stability, top-k composition and reviewed precision—not general
+accuracy.
+
+## Model improvement
+
+**Request:** “Improve the model in this project.”
+
+Read existing config, metrics, split/data fingerprints and holdout history.
+Do not optimize against the historical holdout. Create new validation evidence
+or new future/external evaluation data, preserve the old result and record the
+new run separately.

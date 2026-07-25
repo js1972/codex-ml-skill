@@ -1,329 +1,177 @@
 # ml-model-builder
 
-A reusable Codex and Claude Code skill for building classical machine learning
-models from local files or HTTP(S) datasets. It emphasises **transparent,
-repeatable workflows**: decisions are explained in plain language, defaults are
-documented, and material deviations require user approval.
+A shared Codex and Claude Code skill for understanding datasets and building
+reliable classical machine-learning solutions. It supports analysis-only work
+as well as reproducible model development, honest evaluation, and deployable
+training/inference artifacts.
 
-The aim is a skill that produces a model you can deploy and a `results.md`
-you can hand to a non-technical stakeholder.
+## What it can do
 
-## What the skill can do
-
-| Area | Capability |
+| Capability | What the skill does |
 |---|---|
-| ML tasks | Binary/multiclass classification, regression, time-series forecasting, and supervised/unsupervised anomaly detection |
-| Data input | Local or HTTP(S) CSV/Parquet files; multiple schema-aligned datasets |
-| Data quality | Finds duplicates, missingness, low-variance features, correlated features, skew, outliers, imbalance, and temporal gaps |
-| Leakage control | Creates the holdout split before target-aware profiling; checks direct target leakage, post-event fields, entity overlap, and look-ahead features |
-| Baseline and sanity checks | Uses a fixed baseline per task; runs a permutation test for supervised tabular tasks, a naive-forecast comparison for time series, or stability review for unlabeled anomalies |
-| Model improvement | Runs seeded Optuna search with convergence stopping across tree and non-tree model families |
-| Ensembling | Tests a diverse stacking ensemble and keeps it only when validation improves |
-| Benchmarking | Optionally compares the transparent pipeline with AutoGluon on the same data boundaries |
-| Explainability | Optionally produces a SHAP summary |
-| Deliverables | Saves a fitted pipeline, reproducible training and inference scripts, metrics/config JSON, and a stakeholder-friendly `results.md` |
-| Platforms | Uses the same skill source in Codex and Claude Code through platform-specific symlinks |
+| Dataset analysis | Profiles structure, types, missingness, duplicates, cardinality, imbalance, identifiers, outliers, correlations, and temporal coverage |
+| Visual EDA | Produces labeled distribution, frequency, missingness, correlation, target, feature–target, and time-coverage charts with plain-language findings |
+| Problem framing | Defines the business decision, row grain, target, prediction moment, error costs, horizon, review capacity, and deployment constraints |
+| Leakage prevention | Creates split assignments before target-aware EDA; audits post-outcome fields, target derivation, entity overlap, temporal look-ahead, and train/serve availability |
+| Classification | Handles binary, multiclass, imbalanced, probability, ranking, calibration, and decision-threshold use cases |
+| Regression | Supports robust losses, skewed targets, prediction intervals, asymmetric costs, and segment error analysis |
+| Forecasting | Uses rolling-origin evaluation, naive/seasonal baselines, safe lag features, horizon-specific metrics, intervals, and panel/intermittent-series guidance |
+| Anomaly detection | Separates supervised rare-event prediction from unlabeled anomaly ranking; evaluates review yield, stability, contamination, and domain feedback |
+| Model improvement | Runs task-aware cross-validation and bounded Optuna searches across suitable model families; tries stacking only when evidence supports it |
+| Honest evaluation | Keeps holdout targets sealed, reports uncertainty and subgroup/error slices, and distinguishes validation selection from final evaluation |
+| Production handoff | Saves versioned data/schema/feature contracts, train/infer scripts, a fitted pipeline, pinned dependencies, model card, inference test, metrics, and reports |
+| Optional comparisons | Runs AutoGluon or explainability only when requested and compares operational cost as well as predictive quality |
 
-## Workflow at a glance
+## Operating modes
 
-The skill runs an 11-step workflow with two mandatory gates and one opt-in
-comparison:
-
-1. Intake and clarify requirements (structured user questions)
-2. Set up Python virtual environment in the project directory
-3. Load and validate data, create train/validation/holdout assignments, then
-   profile the training partition (with per-finding user confirmation)
-4. Train the fixed baseline on the prepared split
-5. **Signal check** — run the task-appropriate supervised or diagnostic gate;
-   halt or ask before continuing when no signal is detected
-6. Iterate with Optuna/TPESampler until convergence (tree + non-tree
-   model families for stacking diversity)
-7. **Stacking ensemble** — attempt and adopt only if it beats the single
-   best model by ≥0.5% relative
-8. **Ceiling check** — diagnose whether the dataset is near its predictive
-   ceiling so the user knows whether more trials will help
-9. **AutoGluon comparison** (opt-in only) — head-to-head against an
-   off-the-shelf AutoML system
-10. Evaluate the chosen model once on the holdout test set
-11. Save artefacts and produce `results.md`
-
-Each step prints a `▶ Step N/11 — <name>` header at start and a
-`✓ Step N/11 done — <result>` summary at end. It also uses the host's task-list
-tool when available (`update_plan` in Codex or `TodoWrite` in Claude Code).
-
-## Methodology highlights
-
-### Data profiling with user confirmation
-
-After resolving exact duplicates and creating persistent split assignments,
-the skill profiles the training partition and presents each finding in plain
-language:
-
-- Duplicate rows
-- Missing-value patterns (>50% drop recommendation; retained columns imputed
-  in-pipeline)
-- Near-zero-variance columns
-- Multicollinearity (|r| > 0.95)
-- Skewed numeric distributions (|skew| > 1.0 → valid signed/non-negative
-  transform)
-- Outliers (>3 IQRs, Winsorise / remove / keep choice)
-- Target leakage signals (using task-appropriate association checks)
-- Post-event features unavailable at inference time (training-serving skew)
-- Class imbalance (auto `class_weight='balanced'` <20%; SMOTE prompt <5%)
-- Temporal gaps (time-series tasks)
-
-Each finding is asked as a discrete question through the host's structured
-question UI when available, or as a concise plain-text question otherwise. The
-skill records the decision in `config.json`, and only user-approved transforms
-are fitted on training folds.
-
-### Fixed, documented baseline
-
-The baseline is a deliberately simple algorithm fixed by task type
-(`LogisticRegression` for classification, `Ridge` for regression, etc.).
-The model is not allowed to "improve" the baseline by silently swapping
-in a stronger algorithm, because that destroys cross-run comparability.
-Any deviation must be proposed to the user with a dataset-grounded reason.
-
-### Signal check (anti-noise gate)
-
-After the baseline trains, the skill permutes the training target 20 times and
-scores each shuffled-label baseline against unchanged validation labels. It
-uses a one-sided empirical permutation p-value (α = 0.05), reports effect size,
-and halts or asks before continuing when signal is not detected. Time-series
-tasks instead compare a fixed autoregressive probe with a naive forecast;
-unlabeled anomaly tasks report stability diagnostics and request domain review
-rather than claiming a test that is impossible without labels.
-
-### Convergence-driven Optuna search
-
-- TPESampler with seeded reproducibility
-- Trial budget effectively uncapped (500 trials, 8-hour failsafe)
-- **Primary stopping rule**: 25 consecutive non-improving trials with
-  <0.1% relative gain
-- Single train/val split per trial for ≥5k rows; 5-fold CV per trial
-  for <5k rows
-- Pool **must include at least one non-tree model family**
-  (`LogisticRegression(elasticnet)`, `KNeighbors`, `GaussianNB`) so the
-  stacking step has diverse base learners
-- All preprocessing fit inside each trial's training fold — no leakage
-  to validation
-
-### Stacking ensemble
-
-Picks the top model per distinct family within 10% of the best validation
-score (min 3 families, max 5 base learners). Out-of-fold predictions
-stacked via `LogisticRegression`/`Ridge` meta-learner. Adopted only if
-the ensemble beats the single best by ≥0.5% relative — otherwise rejected
-and the rejection recorded.
-
-### Search-plateau check
-
-After stacking, uses a documented heuristic to flag when the explored model
-families appear to have plateaued:
-
-- Top-3 family validation scores within 1.5% relative of each other
-- Stacking attempted and rejected (or skipped for too few families)
-- Baseline→best gain within 2% relative
-
-When `near_ceiling=true`, `results.md` recommends focusing on new data or
-features rather than more trials. It does not claim the dataset's theoretical
-predictive ceiling has been proven.
-
-### AutoGluon comparison (opt-in)
-
-If the user opts in at intake, the skill runs AutoGluon on the same
-train/validation/holdout boundaries using the `medium_quality` preset and a
-5-minute budget (15 minutes for >100k rows). It compares candidates on
-validation, finalizes them, and then reports their one-time holdout scores. Gap
-bands are descriptive (small / moderate / large), not confidence intervals.
-
-**This is not just a score comparison — it's a deployment-cost comparison.**
-See "Choosing which model to deploy" below for the trade-offs that go
-beyond holdout AUC.
-
-### Honest holdout
-
-The holdout test set is set aside at the very start and not touched
-until step 10. Final metrics are reported from holdout — not from the
-validation set used during search.
-
-### Reproducibility
-
-- Default random seed: 42 (overridable)
-- Seed applied where supported: Python `random`, NumPy,
-  every sklearn model constructor, every split function, XGBoost,
-  LightGBM, CatBoost, Optuna TPESampler
-- A `Reproducibility` footer in `results.md` records seed, trial count,
-  baseline algorithm, package versions, source commit, and timestamp
-  so the artefact on disk is the source of truth
-- Repeatability is scoped to a recorded software/hardware environment;
-  bit-for-bit identity is not promised for threaded or GPU-backed libraries
-
-## Artefacts produced
-
-In the project's `artefacts/` directory:
-
-| File | Description |
+| Mode | Outcome |
 |---|---|
-| `model.joblib` | Full preprocessor + model pipeline as a single joblib object |
-| `train.py` | Reproducible training script |
-| `infer.py` | Inference CLI (`python infer.py --input X.csv --output preds.csv`) |
-| `metrics.json` | Baseline, signal check, Optuna details, stacking, ceiling check, AutoGluon (if run), final holdout score |
-| `config.json` | Full run configuration: dataset, splits, profiling decisions, feature engineering, training bounds, package versions |
-| `shap_summary.html` | (Optional) Beeswarm plot of top 20 features by mean \|SHAP\| value |
-| `autogluon_predictor/` | (Opt-in only) Full AutoGluon predictor directory |
+| Analysis only | A deterministic EDA report, charts, data profile, schema, fingerprint, prioritized findings, and recommended next actions—no placeholder model |
+| Model building | EDA plus baselines, model selection, one-time holdout evaluation, production artifacts, and stakeholder-ready results |
+| Model improvement | Audits an existing run, preserves the meaning of its historical holdout, and uses fresh validation evidence to improve it |
 
-Plus `results.md` in the project root with a human-readable summary:
-data profile, profiling decisions, signal check, best model, AutoML
-comparison (if run), ceiling check, training process, "What to try next"
-(state-dependent recommendations), inference command, and reproducibility
-footer.
+## Workflow
 
-## Choosing which model to deploy
+1. Frame the customer decision and prediction/scoring moment.
+2. Establish the data, target, governance, and inference contracts.
+3. Persist random, grouped, temporal, or grouped-temporal partitions as
+   appropriate.
+4. Analyze the permitted population; target-aware EDA uses training rows only.
+5. Establish naive and fixed baselines plus task-appropriate sanity checks.
+6. Improve suitable candidates within an explicit compute budget.
+7. Select thresholds, calibration, intervals, horizons, or review capacity on
+   validation evidence.
+8. Evaluate the fixed candidate once on holdout with uncertainty and error
+   analysis.
+9. Test inference behavior and document operational limitations.
+10. Validate and save the complete artifact set.
 
-When the skill is run with the AutoGluon opt-in enabled, you end up with
-two candidate models on disk:
+The core [SKILL.md](skills/ml-model-builder/SKILL.md) is deliberately a concise
+router. Detailed methodology lives in focused references, so Codex and Claude
+Code load only the guidance needed for the active task.
 
-- `model.joblib` — the **transparent pipeline** trained by the skill
-- `autogluon_predictor/` — the **AutoGluon predictor**
+## EDA output
 
-The score can favour either candidate, and serving cost depends on the dataset,
-selected models, runtime, and batch size. The skill therefore compares both
-quality and measured deployment properties:
+Run the bundled profiler directly when useful:
 
-| Dimension | Transparent pipeline (`model.joblib`) | AutoGluon predictor |
-|---|---|---|
-| Packaging | One fitted pipeline plus its selected estimator dependencies | Predictor directory plus the dependencies required by its selected ensemble |
-| Inspectability | Direct preprocessing and estimator graph | Leaderboard and model graph, but typically more components |
-| Size, latency, memory | Measured for the produced artifact | Measured with the same host, samples, warm-up, and batch sizes |
-| Serverless / edge fit | Depends on package limits, native libraries, and possibly model conversion | Usually requires more packaging work; verify against the target runtime |
-| Repeatability | Seeded and version-recorded; some libraries remain nondeterministic | Seeded and version-recorded; ensembles and threaded libraries may vary |
+```sh
+python skills/ml-model-builder/scripts/profile_dataset.py \
+  --input data.csv \
+  --output-dir artefacts \
+  --mode analysis-only
+```
 
-The generated comparison reports artifact size and, where practical, median
-and p95 inference latency, cold start, and peak memory. Unmeasured dimensions
-are labelled as such; the skill does not invent universal performance
-multipliers.
+For model-building EDA, create the split first and identify the persisted
+training partition:
 
-### When the transparent pipeline is the right choice
+```sh
+python skills/ml-model-builder/scripts/profile_dataset.py \
+  --input prepared.csv \
+  --output-dir artefacts \
+  --mode model \
+  --task classification \
+  --target churned \
+  --partition-column _ml_partition \
+  --train-label train
+```
 
-- Its validation quality is competitive and its measured serving profile fits
-  the target
-- The model needs to be **inspectable** by stakeholders, auditors, or
-  another engineer
-- A smaller, simpler dependency graph is operationally valuable
-- The target has strict cold-start, memory, or native-library constraints
+The profiler intentionally:
 
-### When AutoGluon is the right choice
+- calculates statistics on all permitted rows and samples only expensive plots;
+- uses observed category and class labels directly in charts;
+- refuses model mode without a persisted partition;
+- reports blockers, warnings, information, sampling, and interpretation limits;
+- exits with status `2` when it detects a modeling blocker such as a
+  single-class training target.
 
-- It shows a repeatable validation gain that matters for the use case
-- Its measured inference profile fits the production service-level objectives
-- A larger ensemble and dependency set are acceptable operationally
-- The team values automated model breadth more than a single-pipeline handoff
+## Outputs
 
-### When both can coexist
+| Artifact | Purpose |
+|---|---|
+| `data_report.html`, `data_summary.md`, `figures/` | Human-readable EDA and charts |
+| `data_profile.json`, `schema.json`, `data_fingerprint.json` | Versioned machine-readable data contract and provenance |
+| `config.json`, `feature_manifest.json` | Problem, split, feature, and selection decisions |
+| `train.py`, `infer.py`, `model.joblib` or `model/` | Reproducible training and trusted local inference |
+| `metrics.json`, `model_card.md`, `results.md` | Evaluation, intended use, limitations, and stakeholder handoff |
+| `requirements.lock`, `inference_test.json` | Pinned environment and tested inference contract |
 
-- Use the transparent pipeline in production and retain AutoGluon as a periodic
-  benchmark.
-- Use AutoGluon for batch scoring while keeping the transparent model for a
-  latency-sensitive path.
-- Re-test both when data drift, dependency versions, or serving infrastructure
-  change.
+Never load an untrusted `joblib`/pickle file: deserialization can execute code.
 
-Both candidates are compared on validation before the one-time holdout
-evaluation. If the holdout result is then used to choose between them, it is a
-benchmark-selection set; use new future or external data for an unbiased
-estimate of the selected model.
+Validate a completed run without loading its model:
 
-## How decisions are made — spec discipline
+```sh
+python skills/ml-model-builder/scripts/validate_run.py /path/to/project
+```
 
-Every decision the skill makes is tagged with one of three categories
-so the model knows what it's allowed to do:
+## Installation for Codex and Claude Code
 
-- **`[ASK]`** — pause and ask the user every time, using the host's structured
-  question UI when available. No batching or "I'll apply these defaults unless
-  you object" lists.
-- **`[DEFAULT]`** — apply the documented value silently for inexpensive,
-  easily-reversed choices (random seed, file naming, default metric).
-- **`[SPEC]`** — use the documented value (timeouts, split ratios,
-  baseline algorithm, convergence rules). A **dataset-grounded** deviation
-  may be proposed to the user, but never applied silently and never
-  justified by a generic preference like "X usually works better than Y."
+Both hosts should link to the same authoritative source:
 
-"Improving" on the spec without telling the user is treated as a defect.
-Transparency is the skill's distinctive value.
-
-## Long-running steps use managed processes
-
-The skill writes long-running Python entry points to disk and launches them
-through the host's non-blocking process/session mechanism. Codex retains and
-polls the command session; Claude Code uses background Bash and polls the task.
-This lets Optuna, stacking, and AutoGluon honour user-approved budgets without
-depending on a foreground tool-call timeout.
-
-## Installation
-
-Both hosts can point to the same source directory:
-
-| Host | User-level skill path | Project-level skill path |
+| Host | User-level discovery path | Project-level discovery path |
 |---|---|---|
 | Codex | `~/.agents/skills/ml-model-builder` | `.agents/skills/ml-model-builder` |
 | Claude Code | `~/.claude/skills/ml-model-builder` | `.claude/skills/ml-model-builder` |
 
-For a user-level installation, create both symlinks:
+For a shared user-level installation:
 
 ```sh
 mkdir -p "$HOME/.agents/skills" "$HOME/.claude/skills"
 
 ln -s /absolute/path/to/codex-ml-skill/skills/ml-model-builder \
-      "$HOME/.agents/skills/ml-model-builder"
+  "$HOME/.agents/skills/ml-model-builder"
 
 ln -s /absolute/path/to/codex-ml-skill/skills/ml-model-builder \
-      "$HOME/.claude/skills/ml-model-builder"
+  "$HOME/.claude/skills/ml-model-builder"
 ```
 
-Use only the link for the host you need, or both for a shared installation.
-Start a new Codex task or Claude Code session after the first install. Source
-edits are then available to subsequent sessions through the symlink.
+If either destination already exists, inspect it first and remove only the
+obsolete skill or link you intend to replace. Start a new Codex task or Claude
+Code session after the first installation. Later source edits are immediately
+available through the symlinks.
 
-The paths follow the current
-[Codex skill discovery](https://learn.chatgpt.com/docs/build-skills#where-to-save-skills)
-and
-[Claude Code skills](https://code.claude.com/docs/en/slash-commands)
-documentation.
-
-For a repository-scoped installation, link from the corresponding project
-directory instead:
+`skills/ml-model-builder/` is the development source of truth.
+`dist/ml-model-builder.skill` is a portable snapshot, not Codex's live
+installation. Rebuild it with:
 
 ```sh
-mkdir -p .agents/skills .claude/skills
-
-ln -s ../../skills/ml-model-builder \
-      .agents/skills/ml-model-builder
-
-ln -s ../../skills/ml-model-builder \
-      .claude/skills/ml-model-builder
+python scripts/package_skill.py
 ```
-
-The packaged snapshot at `dist/ml-model-builder.skill` is useful for
-distribution; the source under `skills/ml-model-builder/` remains
-authoritative for development.
 
 ## Repository layout
 
-```
+```text
 skills/ml-model-builder/
-├── SKILL.md                  # Workflow, spec discipline, all 11 steps
+├── SKILL.md
+├── agents/openai.yaml
+├── scripts/
+│   ├── profile_dataset.py
+│   └── validate_run.py
 └── references/
-    ├── defaults.md           # Defaults, models, splits, training bounds
-    ├── artifacts.md          # Output file formats, JSON schemas
-    └── examples.md           # Example prompts per task type
-dist/
-└── ml-model-builder.skill    # Packaged distribution snapshot
+    ├── governance.md
+    ├── data-analysis.md
+    ├── data-and-leakage.md
+    ├── supervised-tabular.md
+    ├── time-series.md
+    ├── anomaly-detection.md
+    ├── optimization-and-ensembling.md
+    ├── evaluation-and-production.md
+    ├── automl.md
+    ├── artifacts.md
+    └── examples.md
+scripts/package_skill.py
+tests/
+dist/ml-model-builder.skill
 ```
 
-## Notes
+## Design principles
 
-- Local artefacts and virtualenvs stay untracked (see `.gitignore`).
-- Codex and Claude Code share the same `SKILL.md` and reference files; only
-  their discovery paths and process tools differ.
+- Prefer a defensible simple model over complexity with weak evaluation.
+- Fit learned preprocessing and resampling inside training folds.
+- Match splits, metrics, permutations, and uncertainty to the data-generating
+  process.
+- Treat automated EDA and explainability as evidence for investigation, not
+  causal proof.
+- Treat unlabeled anomaly detection as review prioritization, not known
+  accuracy.
+- Record assumptions, limitations, failures, resource bounds, and stop reasons.
+- Never call a search plateau the dataset's theoretical predictive ceiling.

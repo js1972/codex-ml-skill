@@ -1,373 +1,352 @@
-# Artifact Layout and Formats
+# Artifact Contract and Schemas
 
-Use the `artefacts/` directory for model outputs. Create it if missing.
-Also write `results.md` in the project root with a concise final summary.
+## Contents
 
-## Expected Files
+- [Versioning](#versioning)
+- [Analysis-only outputs](#analysis-only-outputs)
+- [Model outputs](#model-outputs)
+- [config.json](#configjson)
+- [metrics.json](#metricsjson)
+- [Task-specific evaluation contracts](#task-specific-evaluation-contracts)
+- [Data and inference contracts](#data-and-inference-contracts)
+- [Human-readable reports](#human-readable-reports)
+- [Validation](#validation)
+- [Legacy compatibility](#legacy-compatibility)
+
+## Versioning
+
+Use `schema_version: "2.0"` in `config.json`, `metrics.json`,
+`data_profile.json`, `schema.json`, `feature_manifest.json`, and
+`data_fingerprint.json`.
+
+Keep artifact filenames stable. Add fields compatibly; do not silently change
+the meaning of an existing field. Record deprecations in
+`config.json.compatibility`.
+
+## Analysis-only outputs
+
+Required:
+
+- `artefacts/config.json`
+- `artefacts/data_profile.json`
+- `artefacts/data_report.html`
+- `artefacts/data_summary.md`
+- `artefacts/data_fingerprint.json`
+- `artefacts/schema.json`
+- `artefacts/figures/` with selected PNG charts
+
+Do not create placeholder model files.
+
+## Model outputs
+
+Required in addition to analysis outputs:
 
 - `artefacts/train.py`
 - `artefacts/infer.py`
-- `artefacts/model.joblib` (full preprocessor+model pipeline as a single joblib
-  object — use joblib, not pickle; joblib handles NumPy arrays more reliably)
+- `artefacts/model.joblib` or a versioned `artefacts/model/` directory when the
+  deployable solution contains multiple fitted components
 - `artefacts/metrics.json`
-- `artefacts/config.json`
-- Optional explainability output: `artefacts/shap_summary.html` — beeswarm
-  summary plot of top 20 features by mean absolute SHAP value
-- Optional AutoML comparison output (only when user opted in):
-  `artefacts/autogluon_predictor/` — full AutoGluon predictor directory
-  (not a single file). Load with
-  `TabularPredictor.load('artefacts/autogluon_predictor')`.
-- `results.md` (summary in project root)
+- `artefacts/feature_manifest.json`
+- `artefacts/model_card.md`
+- `artefacts/requirements.lock` or an equivalent fully pinned inference
+  environment
+- `artefacts/inference_test.json`
+- `results.md` in the project root
 
-## Scripts Expectations
+Optional:
 
-- `train.py` should:
-  - load data and apply all profiling decisions (drop columns, record
-    transforms)
-  - split into train/validation/holdout before any fitting
-  - fit the best pipeline on train+validation combined after Optuna completes
-  - evaluate on the holdout test set for final metrics
-  - save the full preprocessor+model pipeline together as `model.joblib`
-  - write `metrics.json` and `config.json`
-- `infer.py` should:
-  - load the saved `model.joblib` pipeline
-  - CLI usage: `python infer.py --input data.csv --output predictions.csv`
-  - apply identical preprocessing to `train.py` (handled automatically by the
-    loaded pipeline)
-  - output a CSV with a `prediction` column alongside the original columns
+- `artefacts/shap_summary.html`
+- `artefacts/autogluon_predictor/`
+- `artefacts/search.db` for resumable Optuna storage
+- `predictions.csv`, `review_queue.csv`, or another requested operational
+  scoring output with passthrough identifiers, as-of timestamp, model/data
+  version, scores/ranks and eligibility/exclusion reasons
 
-## metrics.json (suggested structure)
+Never load an untrusted `model.joblib`.
+
+## config.json
+
+Use this shape:
 
 ```json
 {
-  "task_type": "classification",
-  "metric": "f1_macro",
-  "baseline": {
-    "score": 0.72,
-    "eval_set": "validation",
-    "details": {
-      "accuracy": 0.75
+  "schema_version": "2.0",
+  "mode": "model-building",
+  "problem": {
+    "task": "classification",
+    "business_decision": "prioritize invoices for manual review",
+    "target": "late_payment",
+    "target_derivation": null,
+    "prediction_moment": "invoice issue time",
+    "row_grain": "one row per invoice",
+    "group_column": "customer_id",
+    "time_column": "invoice_date",
+    "error_costs": {
+      "false_positive": "review time",
+      "false_negative": "missed late payment"
     }
   },
-  "signal_check": {
-    "ran": true,
-    "permutations": 20,
-    "real_baseline_score": 0.72,
-    "shuffled_mean": 0.49,
-    "shuffled_std": 0.02,
-    "empirical_p_value": 0.0476,
-    "effect_size": 0.23,
-    "signal_detected": true,
-    "user_overrode_no_signal": false
-  },
-  "stacking": {
-    "attempted": true,
-    "base_learners": ["LightGBM", "XGBoost", "RandomForest"],
-    "meta_learner": "LogisticRegression",
-    "best_single_score": 0.79,
-    "ensemble_score": 0.81,
-    "adopted": true,
-    "reason": "ensemble beat best single by 2.5%",
-    "time_limit_seconds_used": null,
-    "time_limit_source": "spec_unlimited",
-    "execution_mode": "managed_process",
-    "task_or_session_id": "host-process-def456"
-  },
-  "ceiling_check": {
-    "near_ceiling": false,
-    "family_score_spread_pct": 0.018,
-    "baseline_to_best_gain_pct": 0.072,
-    "note": "Top-3 families spread 1.8%; baseline-to-best gain 7.2% — headroom remains."
-  },
-  "autogluon": {
-    "attempted": true,
-    "reason": null,
-    "time_limit_seconds": 300,
-    "preset": "medium_quality",
-    "validation_score": 0.879,
-    "validation_score_vs_main_pct": 0.0046,
-    "holdout_score": 0.881,
-    "holdout_score_vs_main_pct": 0.007,
-    "execution_mode": "managed_process",
-    "task_or_session_id": "host-process-ghi789"
-  },
-  "final": {
-    "score": 0.81,
-    "eval_set": "holdout_test",
-    "model": "stacking_ensemble",
-    "details": {
-      "accuracy": 0.83
-    }
-  }
-}
-```
-
-## config.json (suggested structure)
-
-```json
-{
-  "dataset": {
+  "data": {
     "locations": ["data.csv"],
-    "format": "csv",
-    "merge_strategy": "concat",
-    "source_column": "dataset_source"
+    "fingerprint_file": "artefacts/data_fingerprint.json",
+    "schema_file": "artefacts/schema.json"
   },
-  "task_type": "classification",
-  "target": "label",
-  "target_derivation": null,
-  "inference_trigger": "when an invoice is issued, before it is paid",
-  "metric": "f1_macro",
-  "splits": {
-    "strategy": "random_80_10_10",
-    "train": 0.8,
-    "validation": 0.1,
-    "holdout_test": 0.1
+  "split": {
+    "strategy": "grouped_temporal",
+    "assignment_column": "_ml_partition",
+    "holdout_target_sealed": true,
+    "seed": 42
   },
-  "bounds": {
-    "baseline_trials": 1,
-    "main_trials": 500,
-    "main_hours": 8,
-    "main_seconds_used": 28800,
-    "main_seconds_source": "spec_default",
-    "stacking_seconds_used": null,
-    "stacking_seconds_source": "spec_unlimited",
-    "early_stop_no_improve_trials": 25,
-    "early_stop_min_relative_gain": 0.001
+  "analysis": {
+    "report": "artefacts/data_report.html",
+    "target_aware_partition": "train",
+    "plot_sample_size": 10000,
+    "plot_sample_seed": 42,
+    "reported_columns": ["customer_id", "email"]
   },
-  "optuna": {
+  "feature_contract": {
+    "manifest": "artefacts/feature_manifest.json",
+    "inference_unavailable": ["payment_date", "final_status"],
+    "sensitive_attributes": ["region"],
+    "target_sources_excluded": []
+  },
+  "selection": {
+    "primary_metric": "average_precision",
+    "secondary_metrics": ["log_loss", "recall_at_review_capacity"],
+    "validation": "grouped_temporal_cv",
+    "threshold_rule": "top 200 invoices per week",
+    "calibration": "sigmoid"
+  },
+  "search": {
     "sampler": "TPESampler",
-    "seed": 42,
-    "cv_folds": null,
+    "budget_seconds": 1800,
+    "stop_reason": "budget",
     "execution_mode": "managed_process",
-    "task_or_session_id": "host-process-abc123"
-  },
-  "environment": {
-    "venv_path": ".venv",
-    "packages": {
-      "scikit-learn": "1.4.2",
-      "optuna": "3.6.1",
-      "xgboost": "2.0.3"
-    }
-  },
-  "reproducibility": {
-    "random_seed": 42
-  },
-  "feature_engineering": {
-    "date_parts": ["month", "quarter", "day_of_week", "is_weekend"],
-    "lags": {
-      "target": [1, 7, 14],
-      "rolling_windows": [7, 30]
-    },
-    "transforms": ["log1p:amount"],
-    "text": {
-      "method": "tfidf",
-      "max_features": 5000
-    }
-  },
-  "feature_handling": {
-    "excluded": [],
-    "inference_unavailable": [],
-    "missing_values": {
-      "numeric": "median",
-      "categorical": "mode"
-    },
-    "class_imbalance": {
-      "strategy": "class_weight_balanced",
-      "imbalance_ratio": null
-    }
-  },
-  "explainability": {
-    "requested": false
-  },
-  "signal_check": {
-    "enabled": true,
-    "permutations": 20,
-    "empirical_alpha": 0.05
-  },
-  "stacking": {
-    "enabled": true,
-    "min_families": 3,
-    "max_base_learners": 5,
-    "family_score_window": 0.1,
-    "acceptance_relative_gain": 0.005
+    "task_or_session_id": "host-process-123"
   },
   "comparison": {
     "autogluon": false
+  },
+  "environment": {
+    "python": "3.x.y",
+    "platform": "recorded at runtime",
+    "requirements": "artefacts/requirements.lock"
+  },
+  "compatibility": {
+    "reads_legacy_v1": true,
+    "deprecated_fields": ["ceiling_check"]
   }
 }
 ```
 
-## results.md (suggested structure)
+## metrics.json
 
-```markdown
-# Model Results
+Keep every metric name, direction, dataset and uncertainty explicit:
 
-## Data profile
-- Rows: 1,599
-- Columns: 12
-- Missing values: 0.0%
-- Target distribution: 25% positive, 75% negative
-
-## Profiling decisions
-- Dropped columns: [list any dropped and why]
-- Excluded (unavailable at inference): [columns removed because they wouldn't
-  exist at the prediction moment — training-serving skew; empty if none]
-- Imputed columns: [list strategy per column]
-- Transforms applied in pipeline: [e.g., log1p on amount]
-- Outlier handling: [e.g., capped at 1st/99th percentile for column X]
-
-## Signal check
-- Real baseline: 0.72 (validation)
-- Shuffled-label baselines: 0.49 ± 0.02 (20 permutations)
-- Empirical p-value: 0.0476; effect size: +0.23 AUC
-- Verdict: statistical signal detected — proceeded to iteration
-- What this means: the model is clearly learning something real from the
-  features, not just memorising noise.
-
-## Best model
-- Model: stacking ensemble of LightGBM + XGBoost + RandomForest
-- Meta-learner: LogisticRegression
-- Metric: AUC = 0.91 (holdout test set)
-- Best single model (LightGBM): AUC = 0.89 (validation)
-- Baseline AUC: 0.83 (validation)
-- What AUC means: probability the model ranks a positive example above a
-  negative one; higher is better.
-
-## AutoML comparison (only if user opted in)
-
-Include this section only when `autogluon.attempted == true`. If the user
-did not opt in, omit the section entirely. If they opted in but the run
-was skipped (small data, install failure, time-series task), include the
-section briefly stating why.
-
-- Validation: AutoGluon AUC = 0.879; transparent pipeline AUC = 0.875
-- One-time holdout benchmark: AutoGluon AUC = 0.881; transparent pipeline
-  AUC = 0.878
-- Validation gap: +0.5% in AutoGluon's favour (small observed gap)
-- Verdict: "The observed validation gap is small, but this single split does
-  not establish statistical equivalence. Use the transparent pipeline if you
-  value inspectability; consider AutoGluon if the measured lift is confirmed
-  and justifies its serving requirements."
-
-(Adjust the descriptive band per SKILL.md §4.7: within 1% → "small observed
-gap"; 1–3% → "moderate observed gap"; >3% → "large observed gap". Do not use
-"margin of error" without an uncertainty estimate.)
-
-**Deployment trade-off** (mandatory; use measured values, not universal
-multipliers):
-
-| Measurement | Transparent pipeline | AutoGluon | Test context |
-|---|---:|---:|---|
-| Artifact size | 84 MB | 1.2 GB | Serialized output on disk |
-| Warm latency, batch 1 (median / p95) | 4 / 7 ms | 61 / 88 ms | 100 runs after 10 warm-ups |
-| Warm latency, batch 1,000 | 120 ms | 410 ms | Same host |
-| Cold start | not measured | not measured | — |
-| Peak RSS | not measured | not measured | — |
-
-State the host, CPU/GPU, package versions, sample size, and timing method.
-Label unmeasured dimensions explicitly. Explain that serverless or edge
-compatibility depends on the target runtime, package limits, native libraries,
-and possible model conversion.
-
-Inference with the AutoGluon model:
-```bash
-python -c "from autogluon.tabular import TabularPredictor; \
-  p = TabularPredictor.load('artefacts/autogluon_predictor'); \
-  print(p.predict(...))"
+```json
+{
+  "schema_version": "2.0",
+  "task": "classification",
+  "primary_metric": {
+    "name": "average_precision",
+    "direction": "maximize"
+  },
+  "baselines": {
+    "naive": {
+      "validation_mean": 0.12
+    },
+    "fixed": {
+      "model": "LogisticRegression",
+      "validation_mean": 0.41,
+      "validation_std": 0.03
+    }
+  },
+  "signal_diagnostics": {
+    "kind": "group_preserving_permutation",
+    "permutations": 99,
+    "empirical_p_value": 0.01,
+    "effect_size": 0.29,
+    "verdict": "learnable signal detected"
+  },
+  "search": {
+    "completed_trials": 84,
+    "failed_trials": 2,
+    "best_family": "LightGBM",
+    "validation_mean": 0.53,
+    "validation_std": 0.02,
+    "stop_reason": "budget",
+    "plateau_detected": false
+  },
+  "stacking": {
+    "attempted": true,
+    "adopted": false,
+    "reason": "gain was not repeatable across folds"
+  },
+  "selection": {
+    "model": "LightGBM",
+    "threshold_rule": "top 200 invoices per week",
+    "calibration": "sigmoid"
+  },
+  "final": {
+    "eval_set": "holdout_test",
+    "score": 0.51,
+    "metric": "average_precision",
+    "confidence_interval": [0.47, 0.55],
+    "secondary": {
+      "log_loss": 0.31,
+      "recall_at_review_capacity": 0.68
+    }
+  },
+  "subgroups": {
+    "reported": true,
+    "minimum_support": 50,
+    "summary": "see results.md"
+  },
+  "autogluon": {
+    "attempted": false,
+    "reason": "user did not opt in"
+  }
+}
 ```
 
-## Search-plateau check
-- Top-3 family validation spread: 1.8% relative (LightGBM 0.89, XGBoost 0.88,
-  RandomForest 0.875)
-- Baseline → best gain: 7.2% relative
-- Verdict: headroom remains — different models still produce meaningfully
-  different scores, and the iteration step beat the baseline by a non-trivial
-  margin.
+Retain the top-level `final` object for existing consumers.
 
-(If `near_ceiling = true`, replace the verdict with the plain-language
-explanation from SKILL.md §4.6 — e.g. "All explored families clustered within
-~1% and stacking did not help; further trials in this search space are unlikely
-to improve this score. This is not proof of the dataset's theoretical
-ceiling.")
+## Task-specific evaluation contracts
 
-## Training process
-- Split: random 80/10/10 (train/validation/holdout), stratified
-- Preprocessing: median imputation + one-hot encoding (fit on training fold only)
-- Feature engineering: date parts (month, day_of_week), lag(1, 7), rolling mean
-- Optimizer: Optuna TPESampler, seed 42
-- Trials run: 87 (converged — 25 non-improving trials with < 0.1% gain)
-- Stacking: 3 base learners selected, ensemble beat best single by 2.2% → adopted
-- Seed: 42
+### Unlabeled anomaly ranking
 
-## What to try next
+Do not fabricate a holdout target or predictive score. Set
+`problem.labels_available: false`, define the reference/scoring windows and
+daily queue contract in `config.json`, and use:
 
-Generate this section from the run's state — do not boilerplate it. Use the
-rules below:
-
-- **If `near_ceiling = true`**: list (in this order) collecting new features,
-  reframing the target, joining external context, and — if any text fields
-  exist — trying an LLM-based approach. Do not suggest "more trials" or
-  "different hyperparameters"; those will not help.
-- **If stacking was skipped because too few families converged**: suggest
-  adding the missing families (e.g. "CatBoost was not installed; installing
-  it could enable stacking").
-- **If baseline → best gain was modest (<5%) but signal was clearly present**:
-  suggest feature engineering targeted at the top SHAP features.
-- **If SHAP was not run**: suggest running it to identify which features
-  are driving the score — a one-line recommendation, not a paragraph.
-- **Always**: name the single most important data lever the user could pull,
-  in one sentence.
-
-## Inference
-- Run: `python artefacts/infer.py --input new_data.csv --output predictions.csv`
-
-## Artifacts
-- artefacts/model.joblib
-- artefacts/train.py
-- artefacts/infer.py
-- artefacts/metrics.json
-- artefacts/config.json
-
----
-## Reproducibility
-
-This footer makes the artefact on disk the source of truth — if a chat
-summary disagrees with these numbers, trust this footer.
-
-- Random seed: 42
-- Trials run: 87 (Optuna TPESampler, convergence: 25 non-improving with <0.1% gain)
-- Final eval set: holdout_test (532 rows, never touched during search)
-- Baseline algorithm: LogisticRegression (fixed per task type)
-- Source repo commit: <git rev-parse HEAD if available>
-- Python: 3.x.y · scikit-learn x.y · optuna x.y · lightgbm x.y · xgboost x.y
-- Generated: <ISO timestamp>
+```json
+{
+  "schema_version": "2.0",
+  "task": "anomaly",
+  "primary_metric": null,
+  "anomaly_evaluation": {
+    "scoring_unit": "UTC day",
+    "review_capacity": 200,
+    "same_population_rank_stability": {
+      "spearman_mean": 0.91,
+      "top_k_overlap_mean": 0.82
+    },
+    "queue_concentration": {
+      "maximum_per_account": 3,
+      "largest_merchant_fraction": 0.08
+    },
+    "reviewed_precision_at_k": null,
+    "reviewed_rows": 0,
+    "unreviewed_rows_treated_as_negative": false
+  },
+  "final": {
+    "eval_set": "future_scoring_window",
+    "score": null,
+    "queue_size": 200,
+    "predictive_performance_available": false
+  }
+}
 ```
 
-## No-signal results.md variant
+The inference contract must distinguish row scoring from whole-batch queue
+selection and define timezone/cutoff, eligibility, sub-capacity behavior,
+stable tie-breaking, identifier passthrough, ranks, flags and reason codes.
 
-If the signal check fails and the user opts to halt, the `results.md` should
-clearly state that no model was produced. Example:
+### Forecasting
 
-```markdown
-# Model Results — No Signal Detected
+Record forecast origin, issuance/retraining cadence, horizon, direct/recursive/
+multi-output strategy, historical covariate-vintage rule, target meaning
+(observed sales versus latent demand), quantiles, interval coverage semantics
+and cumulative lead-time outputs. Inference inputs must separate historical
+observations from future-known covariates and outputs must include entity,
+forecast date, horizon and quantile/point columns.
 
-## Verdict
-This dataset does not contain enough signal to predict the target reliably.
+## Data and inference contracts
 
-## Signal check
-- Real baseline: 0.51 (validation)
-- Shuffled-label baselines: 0.49 ± 0.02 (20 permutations)
-- Empirical p-value: 0.14
-- The permutation test did not detect reliable signal at α = 0.05.
+### data_fingerprint.json
 
-## What to try instead
-- Collect more or different features for each row.
-- Reconsider how the target is defined or derived.
-- If most of the signal might live in free text, consider an LLM-based approach.
-- Confirm there are no upstream data issues (wrong join key, stale labels).
+Record cryptographic file hashes, sizes, row/column counts, source commit when
+available, and generation timestamp. Hashes identify inputs; they do not
+anonymize them.
 
-## Artifacts
-- artefacts/metrics.json (includes the signal-check result)
-- artefacts/config.json
-- No model was saved.
+### schema.json
+
+Record required/optional columns, dtypes, semantic types, units, timezone,
+allowed missingness, target, partition column and compatibility behavior.
+
+### feature_manifest.json
+
+Record:
+
+- raw input features;
+- engineered features and formulas;
+- excluded identifiers/sensitive/post-event/target-source columns;
+- prediction-time availability;
+- preprocessing per feature;
+- expected category/unseen-category behavior.
+
+### inference_test.json
+
+Record the command, trusted model hash, test input schema, expected
+output schema, row count, prediction checksum/tolerance, and tested edge cases.
+
+## Human-readable reports
+
+### data_summary.md
+
+Include:
+
+- dataset purpose and scope;
+- structural profile;
+- important charts and plain-language interpretation;
+- blockers/warnings/information;
+- reporting/sampling/holdout boundaries;
+- recommended next actions.
+
+### results.md
+
+Include:
+
+- business question, prediction moment and intended use;
+- dataset/split summary linked to EDA;
+- leakage and data-quality decisions;
+- baselines and signal diagnostics;
+- model-selection method and compute budget;
+- validation and one-time holdout metrics with uncertainty;
+- threshold/calibration/forecast horizon/anomaly review budget;
+- subgroup/error analysis;
+- explainability with limitations;
+- production schema, inference command and trusted-artifact warning;
+- limitations, prohibited uses, monitoring and retraining guidance;
+- reproducibility footer.
+
+### model_card.md
+
+Summarize intended users, intended/out-of-scope uses, training data, evaluation,
+ethical/fairness limitations, operational constraints and ownership.
+
+## Validation
+
+Run:
+
+```text
+python scripts/validate_run.py <project-directory>
 ```
+
+Then run a real inference round trip in the project environment. Treat
+validator warnings as explicit handoff limitations; fix errors before
+completion.
+
+## Legacy compatibility
+
+Treat artifacts without `schema_version` as version 1:
+
+- accept legacy `final.eval_set == "holdout_test"`;
+- accept `ceiling_check` on read but write `search.plateau_detected`;
+- accept legacy `inference_trigger` but write
+  `problem.prediction_moment`;
+- accept existing filenames;
+- warn that v1 lacks the full data/schema/model-card contract.
+
+Do not rewrite a historical artifact silently. Migrate into a new run directory
+or preserve a backup.
