@@ -94,8 +94,15 @@ Use this shape:
   "split": {
     "strategy": "grouped_temporal",
     "assignment_column": "_ml_partition",
+    "development_label": "train",
     "holdout_target_sealed": true,
     "seed": 42
+  },
+  "evaluation": {
+    "design": "holdout",
+    "final_eval_set": "holdout_test",
+    "independent_test": true,
+    "selection_nested": false
   },
   "analysis": {
     "report": "artefacts/data_report.html",
@@ -126,6 +133,12 @@ Use this shape:
   },
   "comparison": {
     "autogluon": false
+  },
+  "governance": {
+    "risk_tier": "standard",
+    "domain_owner": "accounts-receivable operations",
+    "deployment_decision": "decision_support",
+    "approval_status": "not_required"
   },
   "environment": {
     "python": "3.x.y",
@@ -211,6 +224,14 @@ Keep every metric name, direction, dataset and uncertainty explicit:
 
 Retain the top-level `final` object for existing consumers.
 
+For `evaluation.design: "nested_cv"`, use
+`final.eval_set: "outer_cv"`, set `selection_nested: true` and
+`independent_test: false`, and store outer-fold scores, an explicit
+mean/median aggregation, and uncertainty. Do not call this an independent
+holdout result. `external_test` and
+`prospective_validation` designs must fingerprint and describe the external or
+future cohort.
+
 ## Task-specific evaluation contracts
 
 ### Unlabeled anomaly ranking
@@ -287,8 +308,10 @@ Record:
 
 ### inference_test.json
 
-Record the command, trusted model hash, test input schema, expected
-output schema, row count, prediction checksum/tolerance, and tested edge cases.
+Record the display command, a non-shell `argv` array, trusted model hash, test
+input schema, expected output schema, row count, prediction
+checksum/tolerance, and tested edge cases. Use `"{python}"` in `argv` to request
+the interpreter running the validator.
 
 ## Human-readable reports
 
@@ -312,7 +335,7 @@ Include:
 - leakage and data-quality decisions;
 - baselines and signal diagnostics;
 - model-selection method and compute budget;
-- validation and one-time holdout metrics with uncertainty;
+- development and declared final/outer metrics with uncertainty;
 - threshold/calibration/forecast horizon/anomaly review budget;
 - subgroup/error analysis;
 - explainability with limitations;
@@ -327,13 +350,16 @@ ethical/fairness limitations, operational constraints and ownership.
 
 ## Validation
 
-Run:
+Run the structural/semantic artifact checks and the real declared inference
+round trip:
 
 ```text
-python scripts/validate_run.py <project-directory>
+python scripts/validate_run.py <project-directory> --run-inference-test
 ```
 
-Then run a real inference round trip in the project environment. Treat
+The validator does not prove that split construction, fold-local preprocessing,
+model selection, or uncertainty estimation were scientifically correct.
+Reconcile the training code, logs, fold assignments and reports. Treat
 validator warnings as explicit handoff limitations; fix errors before
 completion.
 

@@ -1,6 +1,6 @@
 ---
 name: ml-model-builder
-description: Analyze and explain local or URL datasets and build production-minded classical machine learning models in Codex or Claude Code. Use when users ask to explore, profile, understand, visualize, train, evaluate, compare, or improve tabular classification, regression, time-series forecasting, or anomaly-detection solutions. Covers leakage-aware data analysis, task-appropriate validation, Optuna optimization, optional AutoGluon benchmarking, explainability, and deployable train/infer artifacts.
+description: Analyze and explain local, URL, or remote warehouse/lake datasets and build production-minded classical machine learning models in Codex or Claude Code. Use when users ask to explore, profile, understand, visualize, train, evaluate, compare, or improve tabular classification, regression, time-series forecasting, or anomaly-detection solutions. Covers memory- and leakage-aware data analysis, task-appropriate validation, high-stakes safeguards, Optuna optimization, optional AutoGluon benchmarking, explainability, and deployable train/infer artifacts.
 ---
 
 # ML Model Builder
@@ -21,15 +21,16 @@ Choose one mode during intake and record it in `artefacts/config.json`.
 2. **Model building** — analyze the dataset, build task-appropriate candidates,
    evaluate them, and save training/inference artifacts.
 3. **Model improvement** — inspect an existing run and its artifacts, preserve
-   the original holdout result, then improve the workflow using new validation
-   evidence. Do not repeatedly tune against the old holdout.
+   the meaning of its historical evaluation, then improve the workflow using
+   fresh development evidence. Do not repeatedly tune against an old holdout,
+   external test, or outer-fold result.
 
 ## Non-negotiable safeguards
 
 - Define the prediction or scoring moment before choosing features.
 - Derive split assignments before target-aware analysis.
 - Fit every learned preprocessing step on training folds only.
-- Keep holdout targets sealed until the final candidate is fixed.
+- Keep holdout/external targets sealed until the final candidate is fixed.
 - Respect time, group, and repeated-entity structure in every split and
   permutation.
 - Treat unlabeled anomaly detection as prioritization for review, not measured
@@ -50,12 +51,14 @@ Read only the references needed for the selected route:
 |---|---|
 | User decisions, progress, managed processes | `references/governance.md` |
 | EDA, charts, sampling, reporting | `references/data-analysis.md` |
+| Data larger than local memory/disk | `references/large-data.md` |
 | Data contracts, splitting, preprocessing, leakage | `references/data-and-leakage.md` |
 | Classification or regression | `references/supervised-tabular.md` |
 | Forecasting or time-dependent prediction | `references/time-series.md` |
 | Supervised or unsupervised anomaly detection | `references/anomaly-detection.md` |
 | Optuna, signal checks, model search, stacking | `references/optimization-and-ensembling.md` |
 | Metrics, uncertainty, explainability, deployment | `references/evaluation-and-production.md` |
+| Healthcare, finance, employment, insurance, or other high-stakes use | `references/high-stakes.md` |
 | Optional AutoGluon comparison | `references/automl.md` |
 | Output files and versioned schemas | `references/artifacts.md` |
 | Example requests and clarification patterns | `references/examples.md` |
@@ -66,6 +69,10 @@ task reference, `optimization-and-ensembling.md`, and
 `evaluation-and-production.md`. Read `automl.md` only after an explicit opt-in.
 For classification/regression with future outcomes or delayed labels, read
 `time-series.md` as well for temporal validation and censoring safeguards.
+Read `large-data.md` before loading data that may exceed local memory or disk.
+Read `high-stakes.md` whenever predictions could materially affect a person's
+health, safety, liberty, employment, credit, insurance, education, housing, or
+access to essential services.
 
 ## Workflow
 
@@ -99,12 +106,18 @@ exists. Install only required packages into that environment. Ask before large
 optional installations. Use the host's managed-process/session mechanism for
 long-running work; do not shorten an approved ML budget to fit a tool timeout.
 
+Before loading data, estimate memory, disk, scan, and compute requirements.
+Use the DuckDB profiler for data larger than safe in-memory limits. If data
+cannot fit local disk or compute, execute aggregations/training where the data
+already lives rather than downloading it.
+
 ### 3. Load and establish the data contract
 
-Support local or HTTP(S) CSV/Parquet inputs. Validate formats, schema, target
-derivation, row grain, join keys, units, time coverage, label timing, and
-feature availability. For multiple datasets, confirm join/concat semantics;
-never assume row-wise concatenation merely because schemas align.
+Support local/object-store CSV/Parquet inputs and warehouse/lake tables through
+their native query engines. Validate formats, schema, target derivation, row
+grain, join keys, units, time coverage, label timing, and feature availability.
+For multiple datasets, confirm join/concat semantics; never assume row-wise
+concatenation merely because schemas align.
 
 Identify duplicate records, repeated entities, source-system columns,
 identifier-like fields, high-cardinality categoricals, free text, sensitive
@@ -121,6 +134,11 @@ EDA or model decisions.
 
 In analysis-only mode, do not invent a holdout. Analyze the full permitted
 dataset and label the report as descriptive rather than predictive.
+
+Do not force a separate holdout when it would leave too few independent groups
+or rare events for meaningful evaluation. Predeclare nested/repeated outer CV,
+external validation, or prospective validation instead and state exactly what
+independence the estimate does and does not provide.
 
 ### 5. Analyze and explain the dataset
 
@@ -168,9 +186,10 @@ evidence; never require diversity models that are unsuitable for the data.
 
 ### 8. Select, calibrate, and evaluate
 
-Finalize the model, threshold, calibration, or anomaly-review budget using
-training/validation evidence. Refit on training plus validation when valid,
-then evaluate once on holdout. Report:
+Finalize the model, threshold, calibration, or anomaly-review budget using only
+the inner/development evidence permitted by the declared evaluation design.
+Then evaluate once on the predeclared holdout/external set or aggregate
+untouched outer folds. Report:
 
 - primary and secondary metrics;
 - uncertainty intervals or repeated-fold variation;
@@ -201,15 +220,22 @@ artifact size and latency only with a documented benchmark context.
 
 Follow `references/artifacts.md`. Always include `schema_version`. Save the data
 contract, feature manifest, data fingerprint, dependency versions, intended-use
-limitations, and exact inference command. Run
-`scripts/validate_run.py <project-directory>` before declaring completion.
+limitations, and exact inference command. Run the artifact-contract validator
+and the real inference round trip:
+
+```text
+python scripts/validate_run.py <project-directory> --run-inference-test
+```
+
+Contract validation cannot prove that the scientific design was followed;
+reconcile scripts, logs, folds, metrics, and reports before declaring completion.
 
 ## Completion checklist
 
 - [ ] Mode, business decision, prediction moment, row grain, and error costs
       are recorded.
-- [ ] Split strategy matches time/group/entity structure and holdout targets
-      remained sealed.
+- [ ] Split/evaluation strategy matches time/group/entity structure and every
+      holdout/external/outer-fold target boundary remained sealed.
 - [ ] EDA artifacts exist and target-aware analysis used training data only.
 - [ ] Feature availability and target derivation were audited for leakage.
 - [ ] Preprocessing, resampling, and feature selection occurred inside folds.

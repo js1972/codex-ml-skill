@@ -11,6 +11,7 @@ training/inference artifacts.
 |---|---|
 | Dataset analysis | Profiles structure, types, missingness, duplicates, cardinality, imbalance, identifiers, outliers, correlations, and temporal coverage |
 | Visual EDA | Produces labeled distribution, frequency, missingness, correlation, target, feature–target, and time-coverage charts with plain-language findings |
+| Large data | Routes beyond-memory local files through disk-backed DuckDB and guides warehouse, lakehouse, cluster, cloud-VM, and out-of-core execution |
 | Problem framing | Defines the business decision, row grain, target, prediction moment, error costs, horizon, review capacity, and deployment constraints |
 | Leakage prevention | Creates split assignments before target-aware EDA; audits post-outcome fields, target derivation, entity overlap, temporal look-ahead, and train/serve availability |
 | Classification | Handles binary, multiclass, imbalanced, probability, ranking, calibration, and decision-threshold use cases |
@@ -18,7 +19,8 @@ training/inference artifacts.
 | Forecasting | Uses rolling-origin evaluation, naive/seasonal baselines, safe lag features, horizon-specific metrics, intervals, and panel/intermittent-series guidance |
 | Anomaly detection | Separates supervised rare-event prediction from unlabeled anomaly ranking; evaluates review yield, stability, contamination, and domain feedback |
 | Model improvement | Runs task-aware cross-validation and bounded Optuna searches across suitable model families; tries stacking only when evidence supports it |
-| Honest evaluation | Keeps holdout targets sealed, reports uncertainty and subgroup/error slices, and distinguishes validation selection from final evaluation |
+| Honest evaluation | Uses holdout, nested CV, external, or prospective validation as scientifically appropriate; reports uncertainty and subgroup/error slices |
+| High-stakes safeguards | Requires domain ownership, oversight, harm-specific evidence, approval status, and prospective/external validation before deployment claims |
 | Production handoff | Saves versioned data/schema/feature contracts, train/infer scripts, a fitted pipeline, pinned dependencies, model card, inference test, metrics, and reports |
 | Optional comparisons | Runs AutoGluon or explainability only when requested and compares operational cost as well as predictive quality |
 
@@ -27,8 +29,8 @@ training/inference artifacts.
 | Mode | Outcome |
 |---|---|
 | Analysis only | A deterministic EDA report, charts, data profile, schema, fingerprint, prioritized findings, and recommended next actions—no placeholder model |
-| Model building | EDA plus baselines, model selection, one-time holdout evaluation, production artifacts, and stakeholder-ready results |
-| Model improvement | Audits an existing run, preserves the meaning of its historical holdout, and uses fresh validation evidence to improve it |
+| Model building | EDA plus baselines, model selection, predeclared honest evaluation, production artifacts, and stakeholder-ready results |
+| Model improvement | Audits an existing run, preserves the meaning of its historical evaluation, and uses fresh development evidence to improve it |
 
 ## Workflow
 
@@ -41,8 +43,8 @@ training/inference artifacts.
 6. Improve suitable candidates within an explicit compute budget.
 7. Select thresholds, calibration, intervals, horizons, or review capacity on
    validation evidence.
-8. Evaluate the fixed candidate once on holdout with uncertainty and error
-   analysis.
+8. Evaluate using the predeclared holdout, untouched outer folds, external set,
+   or prospective cohort with uncertainty and error analysis.
 9. Test inference behavior and document operational limitations.
 10. Validate and save the complete artifact set.
 
@@ -84,6 +86,26 @@ The profiler intentionally:
 - exits with status `2` when it detects a modeling blocker such as a
   single-class training target.
 
+For a local file that is too large for safe in-memory pandas analysis, auto
+mode routes to DuckDB when installed:
+
+```sh
+python -m pip install duckdb
+
+python skills/ml-model-builder/scripts/profile_dataset.py \
+  --input very-large.csv \
+  --output-dir artefacts \
+  --engine auto \
+  --expected-source-bytes 50000000000 \
+  --duckdb-memory-limit 4GB \
+  --duckdb-temp-directory /path/to/fast-working-disk
+```
+
+DuckDB keeps memory bounded and spills to disk. If the data also exceeds local
+disk or practical local scan time, run profiling and feature preparation in
+the warehouse/lakehouse/cluster where the data already lives. See
+[large-data.md](skills/ml-model-builder/references/large-data.md).
+
 ## Outputs
 
 | Artifact | Purpose |
@@ -97,11 +119,19 @@ The profiler intentionally:
 
 Never load an untrusted `joblib`/pickle file: deserialization can execute code.
 
-Validate a completed run without loading its model:
+Validate the artifact contract and execute the declared inference round trip:
 
 ```sh
-python skills/ml-model-builder/scripts/validate_run.py /path/to/project
+python skills/ml-model-builder/scripts/validate_run.py \
+  /path/to/project \
+  --run-inference-test
 ```
+
+This checks artifacts, metric types/ranges, evaluation declarations,
+high-stakes governance fields, model hashes, and executable inference. It
+cannot prove that the training code actually respected folds or that the
+scientific design was correct; the Skill also reconciles training code, logs,
+fold assignments, metrics, and reports.
 
 ## Installation for Codex and Claude Code
 
@@ -129,13 +159,7 @@ obsolete skill or link you intend to replace. Start a new Codex task or Claude
 Code session after the first installation. Later source edits are immediately
 available through the symlinks.
 
-`skills/ml-model-builder/` is the development source of truth.
-`dist/ml-model-builder.skill` is a portable snapshot, not Codex's live
-installation. Rebuild it with:
-
-```sh
-python scripts/package_skill.py
-```
+`skills/ml-model-builder/` is the single source of truth used by both symlinks.
 
 ## Repository layout
 
@@ -145,22 +169,23 @@ skills/ml-model-builder/
 ├── agents/openai.yaml
 ├── scripts/
 │   ├── profile_dataset.py
+│   ├── profile_large_dataset.py
 │   └── validate_run.py
 └── references/
     ├── governance.md
     ├── data-analysis.md
+    ├── large-data.md
     ├── data-and-leakage.md
     ├── supervised-tabular.md
     ├── time-series.md
     ├── anomaly-detection.md
     ├── optimization-and-ensembling.md
     ├── evaluation-and-production.md
+    ├── high-stakes.md
     ├── automl.md
     ├── artifacts.md
     └── examples.md
-scripts/package_skill.py
 tests/
-dist/ml-model-builder.skill
 ```
 
 ## Design principles

@@ -3,6 +3,7 @@
 ## Contents
 
 - [Honest evaluation](#honest-evaluation)
+- [Evaluation design choices](#evaluation-design-choices)
 - [Uncertainty and practical value](#uncertainty-and-practical-value)
 - [Error and subgroup analysis](#error-and-subgroup-analysis)
 - [Explainability](#explainability)
@@ -13,15 +14,34 @@
 ## Honest evaluation
 
 - Select model family, hyperparameters, features, threshold, calibration and
-  post-processing without holdout targets.
+  post-processing without holdout/external targets or the active outer fold.
 - Refit the frozen pipeline on train+validation when methodologically valid.
-- Evaluate once on holdout using the same metric implementation and data
-  contract.
-- Report validation and holdout separately.
-- If holdout influences a later choice, stop calling it an unbiased final test.
+- Evaluate once on the declared final evaluation population using the same
+  metric implementation and data contract.
+- Report development/inner evidence separately from final/outer evidence.
+- If final evidence influences a later choice, stop calling it unbiased.
 
-Never compare a holdout result with a benchmark from different rows, horizon,
+Never compare a final result with a benchmark from different rows, horizon,
 label definition or metric implementation.
+
+## Evaluation design choices
+
+Declare one design before target-aware modeling:
+
+| Design | Use when | Required interpretation |
+|---|---|---|
+| `holdout` | Enough independent groups/events remain after development splitting | One untouched internal test, opened once |
+| `nested_cv` | Small/grouped/rare data cannot support a useful fixed holdout | Outer-fold estimate includes model selection inside each outer training fold; no independent final test |
+| `external_test` | A genuinely separate site, cohort, period, or source exists | Report domain differences and fingerprint the external set |
+| `prospective_validation` | Deployment conditions or labels require future silent testing | Do not claim validated performance until outcomes mature |
+
+Never tune once globally and call ordinary cross-validation “nested.” Every
+feature, preprocessing, family, hyperparameter, calibration, and threshold
+choice must occur inside each outer training partition. Preserve groups/time in
+both inner and outer resampling.
+
+If data are too small for any design to estimate the critical harm/rare-class
+metric, report **evaluation insufficient** rather than manufacturing a score.
 
 ## Uncertainty and practical value
 

@@ -23,12 +23,13 @@ Skip or reframe when:
 
 ## Fair comparison
 
-- Use identical training, validation and holdout boundaries.
+- Use identical development and final/outer evaluation boundaries.
 - Give both approaches the same target, exclusions, metric implementation and
   available-feature contract.
 - Pass training data to `TabularPredictor.fit` and explicit validation through
   `tuning_data` or the version-equivalent mechanism.
-- Keep holdout out of tuning, ensembling and early stopping.
+- Keep holdout/external/active outer-fold targets out of tuning, ensembling and
+  early stopping.
 - Record AutoGluon version, preset, time limit, included/excluded families and
   hardware.
 
@@ -37,8 +38,10 @@ budget. Do not imply it is AutoGluon's maximum achievable quality.
 
 ## Final evaluation
 
-Compare validation evidence first. Finalize/refit both candidates where valid,
-then score each once on holdout.
+Compare permitted development evidence first. Finalize/refit both candidates
+where valid, then score them under the same declared evaluation design. For
+nested CV this means rerunning each complete AutoML selection inside every
+outer training fold; skip the comparison when that cost is unjustified.
 
 Do not silently replace the transparent pipeline. If the user chooses based on
 holdout, label that set a benchmark-selection set and require future/external
@@ -66,7 +69,7 @@ Populate `metrics.json.autogluon` with:
 
 - `attempted`, `reason`;
 - `version`, `preset`, `time_limit_seconds`;
-- validation and holdout metrics;
+- development and declared final/outer metrics;
 - direction-aware gap versus the main pipeline;
 - execution mode/task ID;
 - measured deployment properties and context.

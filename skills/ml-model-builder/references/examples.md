@@ -64,7 +64,7 @@ accuracy.
 
 **Request:** “Improve the model in this project.”
 
-Read existing config, metrics, split/data fingerprints and holdout history.
-Do not optimize against the historical holdout. Create new validation evidence
+Read existing config, metrics, split/data fingerprints and evaluation history.
+Do not optimize against historical final/outer evidence. Create new development evidence
 or new future/external evaluation data, preserve the old result and record the
 new run separately.

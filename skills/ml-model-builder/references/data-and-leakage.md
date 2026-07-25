@@ -65,8 +65,11 @@ Choose splits in this order:
    for regression.
 
 Do not select a split solely from row count. Check that every evaluation fold
-has enough target events, horizon coverage and representative entities. Use
-repeated or nested cross-validation when a single split would be unstable.
+has enough target events, horizon coverage and representative entities. For
+small grouped or rare-outcome datasets, prefer repeated/nested outer
+cross-validation when a separate holdout would be too small to support the
+claimed metric. State that outer CV is an internal generalization estimate and
+still requires future/external validation for high-stakes deployment.
 
 Persist split assignments or the deterministic rule. Never allow a target-aware
 decision to inspect held-out targets.

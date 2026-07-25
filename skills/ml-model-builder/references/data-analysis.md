@@ -32,9 +32,10 @@ Include both, but do not let charts silently determine transformations.
 - Keep charts readable: summarize high-cardinality fields and large tables
   because exhaustive rendering is unhelpful, not because values are hidden.
 - In modeling mode, require a persisted partition column before target-aware
-  analysis. Use only rows marked `train`.
-- Do not plot holdout targets, target rates, residuals, or feature-target
-  relationships before final evaluation.
+  analysis. Use only the declared development population.
+- Do not plot holdout, external, prospective, or active outer-fold targets,
+  target rates, residuals, or feature-target relationships before their
+  permitted evaluation step.
 
 ## Core analysis
 
@@ -113,13 +114,23 @@ python scripts/profile_dataset.py \
   --mode analysis-only|model \
   --task analysis|classification|regression|time-series|anomaly \
   [--target <column>] [--time-column <column>] \
-  [--group-column <column>] [--partition-column <column>]
+  [--group-column <column>] [--partition-column <column>] \
+  [--train-label <development-label>] \
+  [--evaluation-design holdout|nested_cv|external_test|prospective_validation]
 ```
 
+The script estimates local in-memory footprint before loading a local file.
+Auto mode routes beyond-memory data to `profile_large_dataset.py` when DuckDB
+is installed. Configure `--duckdb-memory-limit`, `--duckdb-temp-directory` and
+`--threads`; read `large-data.md` when data may exceed local disk or practical
+local scan time.
+
 In model mode, the script must fail closed when target-aware analysis is
-requested without a valid training partition. Use custom analysis when inputs
-or task semantics exceed the script; preserve the same reporting and holdout
-rules.
+requested without a valid development partition. The selected evaluation
+design is written to `config.json`; external and prospective designs still
+require their immutable cohort fingerprint before validation. Use custom
+analysis when inputs or task semantics exceed the script and preserve the same
+reporting boundaries.
 
 ## Required outputs
 

@@ -20,8 +20,9 @@
 5. Compare eligible candidates using identical folds and preprocessing
    boundaries.
 6. Select thresholds/calibration/transforms on validation only.
-7. Refit the frozen pipeline on train+validation.
-8. Evaluate once on holdout and report uncertainty and slices.
+7. Refit the frozen pipeline on the permitted development population.
+8. Evaluate using the declared holdout, untouched outer folds, external set, or
+   prospective cohort and report uncertainty and slices.
 
 Use multiple metrics, but designate one primary selection metric from the
 business decision.
@@ -113,6 +114,13 @@ business tolerance.
 - Produce prediction intervals when decisions require uncertainty. Validate
   empirical coverage and width on untouched evaluation data.
 
+For zero-heavy, non-negative amounts, consider a Tweedie objective or a
+two-part occurrence/severity model and evaluate the combined prediction in
+original units. Do not treat paid-to-date, open duration, or another incomplete
+outcome as the final target. Establish mature labels or a defensible
+censoring/development model with domain review. Closed-only cohorts can be
+selection-biased; report sensitivity to the maturity rule.
+
 ## Candidate families
 
 Select families from data properties rather than enforcing artificial
@@ -151,6 +159,6 @@ Freeze:
 - expected input schema;
 - random seed and dependency versions.
 
-Then refit on train+validation and evaluate once on holdout. If the final refit
-changes model behavior materially, report the risk and retain the
-validation-fitted candidate for comparison.
+Then refit on the permitted development data and evaluate according to the
+declared design. If the final refit changes model behavior materially, report
+the risk and retain the validation-fitted candidate for comparison.

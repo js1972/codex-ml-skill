@@ -6,9 +6,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import importlib.util
 import json
 import math
+import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +23,9 @@ ID_NAME_RE = re.compile(r"(^id$|_id$|^id_|uuid|guid|key$)", re.IGNORECASE)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, help="Local/HTTP(S) CSV or Parquet")
+    parser.add_argument(
+        "--input", required=True, help="Local or supported remote CSV/Parquet source"
+    )
     parser.add_argument("--output-dir", default="artefacts")
     parser.add_argument(
         "--mode", choices=["analysis-only", "model"], default="analysis-only"
@@ -41,11 +46,123 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--group-column")
     parser.add_argument("--partition-column", default="_ml_partition")
     parser.add_argument("--train-label", default="train")
+    parser.add_argument(
+        "--evaluation-design",
+        choices=[
+            "holdout",
+            "nested_cv",
+            "external_test",
+            "prospective_validation",
+        ],
+        default="holdout",
+        help="Predeclared final evaluation design for model mode",
+    )
     parser.add_argument("--max-plot-rows", type=int, default=10_000)
     parser.add_argument("--max-numeric-plots", type=int, default=12)
     parser.add_argument("--max-categorical-plots", type=int, default=12)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--engine",
+        choices=["auto", "pandas", "duckdb"],
+        default="auto",
+        help="Use pandas in memory or DuckDB with disk spilling",
+    )
+    parser.add_argument(
+        "--max-in-memory-bytes",
+        type=int,
+        default=0,
+        help="Override the auto-routing memory budget; 0 derives it from the host",
+    )
+    parser.add_argument(
+        "--expected-source-bytes",
+        type=int,
+        default=0,
+        help="Expected remote/object-store input size for disk preflight",
+    )
+    parser.add_argument("--duckdb-memory-limit", default="4GB")
+    parser.add_argument("--duckdb-temp-directory")
+    parser.add_argument("--threads", type=int, default=0)
     return parser.parse_args()
+
+
+def available_memory_bytes() -> int | None:
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        available_pages = os.sysconf("SC_AVPHYS_PAGES")
+    except (AttributeError, OSError, ValueError):
+        return None
+    if page_size <= 0 or available_pages <= 0:
+        return None
+    return int(page_size * available_pages)
+
+
+def estimated_in_memory_bytes(location: str) -> int | None:
+    parsed = urlparse(location)
+    if parsed.scheme and parsed.scheme != "file":
+        return None
+    path = Path(location).expanduser()
+    if not path.is_file():
+        return None
+    lower = path.name.lower()
+    multiplier = 6 if lower.endswith((".csv", ".csv.gz", ".csv.zst")) else 3
+    return path.stat().st_size * multiplier
+
+
+def should_use_duckdb(args: argparse.Namespace) -> tuple[bool, str]:
+    if args.engine == "duckdb":
+        return True, "explicit --engine duckdb"
+    if args.engine == "pandas":
+        return False, "explicit --engine pandas"
+    parsed = urlparse(args.input)
+    if parsed.scheme and parsed.scheme != "file":
+        return True, "remote/object-store input has unknown in-memory size"
+    estimate = estimated_in_memory_bytes(args.input)
+    if estimate is None:
+        return False, "input size unavailable"
+    available = available_memory_bytes()
+    derived_budget = (
+        min(2 * 1024**3, int(available * 0.25)) if available else 512 * 1024**2
+    )
+    budget = args.max_in_memory_bytes or derived_budget
+    if estimate > budget:
+        return (
+            True,
+            (
+                f"estimated in-memory footprint {estimate:,} bytes exceeds "
+                f"budget {budget:,} bytes"
+            ),
+        )
+    return False, f"estimated footprint {estimate:,} bytes fits budget {budget:,} bytes"
+
+
+def run_duckdb_profiler(reason: str) -> int:
+    if importlib.util.find_spec("duckdb") is None:
+        raise SystemExit(
+            "Dataset requires the disk-backed EDA route "
+            f"({reason}), but DuckDB is not installed. Install it in the project "
+            "environment with `python -m pip install duckdb`, or run the analysis "
+            "inside a remote warehouse/cluster. Do not force pandas unless the "
+            "dataset is known to fit memory."
+        )
+    script = Path(__file__).with_name("profile_large_dataset.py")
+    forwarded = []
+    skip_next = False
+    for argument in sys.argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if argument == "--engine":
+            skip_next = True
+            continue
+        if argument.startswith("--engine="):
+            continue
+        forwarded.append(argument)
+    print(f"Routing EDA to DuckDB: {reason}.")
+    completed = subprocess.run(
+        [sys.executable, str(script), *forwarded],
+        check=False,
+    )
+    return completed.returncode
 
 
 def import_analysis_packages():
@@ -66,18 +183,22 @@ def import_analysis_packages():
 def load_frame(pd, location: str):
     parsed = urlparse(location)
     path_part = parsed.path if parsed.scheme in {"http", "https"} else location
-    suffix = Path(path_part).suffix.lower()
-    if suffix == ".csv":
+    lower = path_part.lower()
+    if lower.endswith((".csv", ".csv.gz", ".csv.zst")):
         return pd.read_csv(location)
-    if suffix in {".parquet", ".pq"}:
+    if lower.endswith((".parquet", ".pq")):
         return pd.read_parquet(location)
     raise SystemExit("Input must be a CSV or Parquet file/URL.")
 
 
 def source_fingerprint(pd, location: str, frame) -> dict:
     parsed = urlparse(location)
-    if parsed.scheme not in {"http", "https"}:
-        local = Path(location).expanduser().resolve()
+    if not parsed.scheme or parsed.scheme == "file":
+        local = (
+            Path(parsed.path if parsed.scheme == "file" else location)
+            .expanduser()
+            .resolve()
+        )
         digest = hashlib.sha256()
         with local.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -300,7 +421,7 @@ def plot_categorical(
     )
 
 
-def plot_correlation(plt, analysis_frame, profiles, output, figures):
+def plot_correlation(plt, analysis_frame, profiles, output, figures, sampled=False):
     numeric = [
         column
         for column, info in profiles.items()
@@ -313,21 +434,25 @@ def plot_correlation(plt, analysis_frame, profiles, output, figures):
     image = axis.imshow(correlation, vmin=-1, vmax=1, cmap="coolwarm")
     axis.set_xticks(range(len(numeric)), numeric, rotation=90)
     axis.set_yticks(range(len(numeric)), numeric)
-    axis.set_title("Numeric correlation (permitted analysis population)")
+    population = "deterministic plot sample" if sampled else "analysis population"
+    axis.set_title(f"Numeric correlation ({population})")
     fig.colorbar(image, ax=axis, fraction=0.03)
     save_figure(
         plt,
         fig,
         output / "numeric_correlation.png",
         figures,
-        "Pearson correlations are screening clues, not proof of redundancy or leakage.",
+        "Pearson correlations "
+        f"from the {population} are screening clues, not proof of redundancy "
+        "or leakage.",
     )
 
 
 def plot_target(
     pd,
     plt,
-    analysis_sample,
+    analysis_frame,
+    plot_sample,
     mode,
     task,
     target,
@@ -337,11 +462,12 @@ def plot_target(
     findings,
 ):
     if not target:
-        return
-    if target not in analysis_sample.columns:
+        return None
+    if target not in analysis_frame.columns:
         raise SystemExit(f"Target column '{target}' does not exist.")
-    values = analysis_sample[target].dropna()
-    if values.empty:
+    full_values = analysis_frame[target].dropna()
+    plot_values = plot_sample[target].dropna()
+    if full_values.empty:
         add_finding(
             findings,
             "blocker" if mode == "model" else "warning",
@@ -350,13 +476,14 @@ def plot_target(
             "Fix label generation or partitioning before modeling.",
             target,
         )
-        return
+        return {"non_missing_count": 0}
 
     if task in {"classification", "anomaly"}:
-        counts = values.astype("string").value_counts()
-        labels = [str(value)[:30] for value in counts.index]
+        counts = full_values.astype("string").value_counts()
+        plotted_counts = counts.head(30)
+        labels = [str(value)[:30] for value in plotted_counts.index]
         fig, axis = plt.subplots(figsize=(8, 4))
-        axis.bar(labels, counts.values, color="#ED7D31")
+        axis.bar(labels, plotted_counts.values, color="#ED7D31")
         axis.set_title("Target support (analysis population)")
         axis.set_ylabel("Rows")
         axis.tick_params(axis="x", rotation=45)
@@ -367,6 +494,16 @@ def plot_target(
             figures,
             "Target support from the permitted target-aware population.",
         )
+        if len(counts) > len(plotted_counts):
+            add_finding(
+                findings,
+                "information",
+                "target_classes_truncated_in_chart",
+                f"The target has {len(counts)} classes; the chart shows the 30 "
+                "most frequent.",
+                "Use data_profile.json for complete target support.",
+                target,
+            )
         minority = counts.min() / max(counts.sum(), 1)
         if minority < 0.1:
             add_finding(
@@ -386,11 +523,18 @@ def plot_target(
                 "Fix the split or target before classification modeling.",
                 target,
             )
-        return
+        return {
+            "non_missing_count": int(counts.sum()),
+            "class_count": len(counts),
+            "class_support": [
+                {"label": str(label), "rows": int(rows)}
+                for label, rows in counts.items()
+            ],
+        }
 
-    if profiles[target]["semantic_type"] == "numeric":
+    if profiles[target]["semantic_type"] == "numeric" and not plot_values.empty:
         fig, axis = plt.subplots(figsize=(8, 4))
-        axis.hist(values, bins=30, color="#ED7D31")
+        axis.hist(plot_values, bins=30, color="#ED7D31")
         axis.set_title("Target distribution (analysis population)")
         axis.set_xlabel(target)
         axis.set_ylabel("Rows")
@@ -401,6 +545,10 @@ def plot_target(
             figures,
             "Target distribution from the permitted target-aware population.",
         )
+    return {
+        "non_missing_count": len(full_values),
+        "numeric": profiles[target].get("numeric"),
+    }
 
 
 def plot_feature_relationships(
@@ -733,15 +881,46 @@ def update_config(output_dir: Path, args, population_label: str, plot_rows: int)
                 "assignment_column": args.partition_column
                 if args.mode == "model"
                 else None,
-                "holdout_target_sealed": args.mode == "model",
+                "development_label": args.train_label if args.mode == "model" else None,
+                "holdout_target_sealed": (
+                    args.mode == "model" and args.evaluation_design == "holdout"
+                ),
                 "seed": args.seed,
+            },
+            "evaluation": {
+                "design": args.evaluation_design if args.mode == "model" else None,
+                "final_eval_set": (
+                    {
+                        "holdout": "holdout_test",
+                        "nested_cv": "outer_cv",
+                        "external_test": "external_test",
+                        "prospective_validation": "prospective_validation",
+                    }[args.evaluation_design]
+                    if args.mode == "model"
+                    else None
+                ),
+                "independent_test": (
+                    args.evaluation_design != "nested_cv"
+                    if args.mode == "model"
+                    else None
+                ),
+                "selection_nested": (
+                    args.evaluation_design == "nested_cv"
+                    if args.mode == "model"
+                    else None
+                ),
+            },
+            "governance": {
+                "risk_tier": "standard",
+                "deployment_decision": "not_assessed",
+                "approval_status": "not_assessed",
             },
         }
     config.setdefault("schema_version", SCHEMA_VERSION)
     config["analysis"] = {
         "report": "artefacts/data_report.html",
-        "population_partition": "train" if args.mode == "model" else None,
-        "target_aware_partition": "train"
+        "population_partition": args.train_label if args.mode == "model" else None,
+        "target_aware_partition": args.train_label
         if args.mode == "model" and args.target
         else None,
         "population": population_label,
@@ -754,6 +933,9 @@ def update_config(output_dir: Path, args, population_label: str, plot_rows: int)
 
 def main() -> int:
     args = parse_args()
+    use_duckdb, routing_reason = should_use_duckdb(args)
+    if use_duckdb:
+        return run_duckdb_profiler(routing_reason)
     pd, plt = import_analysis_packages()
     frame = load_frame(pd, args.input)
     if frame.empty:
@@ -826,9 +1008,10 @@ def main() -> int:
         args.max_categorical_plots,
     )
     plot_correlation(plt, analysis_frame, profiles, figures_dir, figures)
-    plot_target(
+    target_summary = plot_target(
         pd,
         plt,
+        analysis_frame,
         plot_sample,
         args.mode,
         args.task,
@@ -904,6 +1087,7 @@ def main() -> int:
             "seed": args.seed,
         },
         "duplicates_full_dataset": duplicates,
+        "target_summary": target_summary,
         "columns": profiles,
         "findings": findings,
         "figures": figures,

@@ -61,7 +61,9 @@ Use the same folds for all candidates. Match deployment:
 Use repeated or nested CV for small/noisy data when compute permits. A fixed
 5,000-row cutoff is not a valid scientific rule.
 
-Keep the holdout outside Optuna and every model-selection decision.
+Keep holdout/external targets outside Optuna and every model-selection
+decision. Under nested CV, rerun the complete selection process inside each
+outer training fold and never expose the active outer-fold targets.
 
 ## Search design
 
