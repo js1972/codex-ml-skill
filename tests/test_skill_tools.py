@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 PROFILE = REPOSITORY / "skills/ml-model-builder/scripts/profile_dataset.py"
@@ -16,6 +17,12 @@ VALIDATE = REPOSITORY / "skills/ml-model-builder/scripts/validate_run.py"
 VALIDATOR_SPEC = importlib.util.spec_from_file_location("validate_run", VALIDATE)
 VALIDATOR = importlib.util.module_from_spec(VALIDATOR_SPEC)
 VALIDATOR_SPEC.loader.exec_module(VALIDATOR)
+PROFILER_SPEC = importlib.util.spec_from_file_location(
+    "profile_dataset_under_test",
+    PROFILE,
+)
+PROFILER = importlib.util.module_from_spec(PROFILER_SPEC)
+PROFILER_SPEC.loader.exec_module(PROFILER)
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
@@ -26,9 +33,13 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 
 
 def run(*arguments: str) -> subprocess.CompletedProcess:
+    return run_from(REPOSITORY, *arguments)
+
+
+def run_from(cwd: Path, *arguments: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, *map(str, arguments)],
-        cwd=REPOSITORY,
+        cwd=cwd,
         text=True,
         capture_output=True,
         check=False,
@@ -83,8 +94,14 @@ class ProfileDatasetTests(unittest.TestCase):
             ]:
                 self.assertTrue((output / filename).is_file())
             report = json.loads((output / "data_profile.json").read_text())
-            self.assertEqual(report["schema_version"], "2.0")
+            self.assertEqual(report["schema_version"], "2.1")
             self.assertGreaterEqual(len(report["figures"]), 5)
+            schema = json.loads((output / "schema.json").read_text())
+            self.assertNotIn("required", schema["columns"]["age"])
+            self.assertEqual(
+                schema["inference"]["requiredness_status"],
+                "not_assessed",
+            )
             report_html = (output / "data_report.html").read_text()
             self.assertIn("observed labels", report_html)
             validated = run(VALIDATE, root)
@@ -107,11 +124,243 @@ class ProfileDatasetTests(unittest.TestCase):
                 "classification",
                 "--target",
                 "churned",
+                "--split-strategy",
+                "stratified_random",
                 "--engine",
                 "duckdb",
             )
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("persisted partition", completed.stderr)
+
+    def test_model_mode_requires_explicit_split_strategy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = self.rows()
+            for index, row in enumerate(rows):
+                row["_ml_partition"] = "train" if index < 60 else "holdout"
+            source = root / "data.csv"
+            write_csv(source, rows)
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                root / "artefacts",
+                "--mode",
+                "model",
+                "--task",
+                "classification",
+                "--target",
+                "churned",
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--split-strategy", completed.stderr)
+
+    def test_model_mode_uses_versioned_run_paths_in_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = self.rows()
+            for index, row in enumerate(rows):
+                row["_ml_partition"] = "train" if index < 60 else "holdout"
+            source = root / "data.csv"
+            output = root / "artefacts/runs/test-run"
+            write_csv(source, rows)
+            completed = run_from(
+                root,
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "model",
+                "--task",
+                "classification",
+                "--target",
+                "churned",
+                "--time-column",
+                "event_time",
+                "--split-strategy",
+                "stratified_random",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            config = json.loads((output / "config.json").read_text())
+            prefix = "artefacts/runs/test-run"
+            self.assertEqual(
+                config["data"]["fingerprint_file"],
+                f"{prefix}/data_fingerprint.json",
+            )
+            self.assertEqual(
+                config["data"]["split_manifest"],
+                f"{prefix}/split_manifest.json",
+            )
+            self.assertEqual(
+                config["analysis"]["report"],
+                f"{prefix}/data_report.html",
+            )
+            split_manifest = json.loads((output / "split_manifest.json").read_text())
+            self.assertFalse(split_manifest["audits"]["temporal_order"]["checked"])
+
+    def test_profiler_does_not_silently_upgrade_existing_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "data.csv"
+            output = root / "artefacts"
+            output.mkdir()
+            write_csv(source, self.rows())
+            original = {"schema_version": "2.0", "mode": "analysis-only"}
+            (output / "config.json").write_text(json.dumps(original))
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "analysis-only",
+                "--engine",
+                "pandas",
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("migrate", completed.stderr.lower())
+            self.assertEqual(
+                json.loads((output / "config.json").read_text()),
+                original,
+            )
+
+    def test_profiler_refuses_to_relabel_an_existing_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first.csv"
+            second = root / "second.csv"
+            output = root / "artefacts"
+            write_csv(first, self.rows())
+            write_csv(second, self.rows()[:40])
+            initial = run(
+                PROFILE,
+                "--input",
+                first,
+                "--output-dir",
+                output,
+                "--mode",
+                "analysis-only",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(initial.returncode, 0, initial.stderr)
+            repeated = run(
+                PROFILE,
+                "--input",
+                second,
+                "--output-dir",
+                output,
+                "--mode",
+                "analysis-only",
+                "--engine",
+                "pandas",
+            )
+            self.assertNotEqual(repeated.returncode, 0)
+            self.assertIn("new output/run directory", repeated.stderr)
+
+    def test_profiler_refuses_changed_contents_at_the_same_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "data.csv"
+            output = root / "artefacts"
+            write_csv(source, self.rows()[:25])
+            initial = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "analysis-only",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(initial.returncode, 0, initial.stderr)
+            write_csv(source, self.rows()[:35])
+            repeated = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "analysis-only",
+                "--engine",
+                "pandas",
+            )
+            self.assertNotEqual(repeated.returncode, 0)
+            self.assertIn("contents changed", repeated.stderr.lower())
+
+    def test_profiler_refuses_to_overwrite_a_manifested_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "data.csv"
+            output = root / "artefacts/runs/test-run"
+            write_csv(source, self.rows())
+            initial = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "analysis-only",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(initial.returncode, 0, initial.stderr)
+            (output / "run_manifest.json").write_text("{}", encoding="utf-8")
+            repeated = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "analysis-only",
+                "--engine",
+                "pandas",
+            )
+            self.assertNotEqual(repeated.returncode, 0)
+            self.assertIn("immutable", repeated.stderr.lower())
+
+    def test_profiler_can_prepare_an_improvement_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = self.rows()
+            for index, row in enumerate(rows):
+                row["_ml_partition"] = "train" if index < 60 else "holdout"
+            source = root / "data.csv"
+            output = root / "artefacts/runs/improvement"
+            write_csv(source, rows)
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "model",
+                "--run-kind",
+                "improvement",
+                "--task",
+                "classification",
+                "--target",
+                "churned",
+                "--split-strategy",
+                "stratified_random",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            config = json.loads((output / "config.json").read_text())
+            self.assertEqual(config["mode"], "model-improvement")
 
     def test_target_profile_uses_training_rows_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -121,6 +370,7 @@ class ProfileDatasetTests(unittest.TestCase):
                 row["_ml_partition"] = "train" if index < 60 else "holdout"
                 if index >= 60:
                     row["churned"] = "HOLDOUT_SECRET"
+                    row["segment"] = "holdout_only"
             source = root / "data.csv"
             output = root / "artefacts"
             write_csv(source, rows)
@@ -136,15 +386,343 @@ class ProfileDatasetTests(unittest.TestCase):
                 "classification",
                 "--target",
                 "churned",
+                "--split-strategy",
+                "stratified_random",
                 "--engine",
                 "duckdb",
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             report = json.loads((output / "data_profile.json").read_text())
-            self.assertEqual(report["analysis_population"]["rows"], 60)
-            self.assertEqual(report["columns"]["churned"]["unique_count"], 2)
+            self.assertEqual(report["analysis_population"]["rows"], 80)
+            self.assertEqual(report["target_aware_population"]["rows"], 60)
+            self.assertFalse(report["columns"]["churned"]["values_inspected"])
+            self.assertEqual(report["columns"]["segment"]["unique_count"], 4)
+            self.assertEqual(report["target_summary"]["class_count"], 2)
             self.assertNotIn(
                 "HOLDOUT_SECRET", (output / "data_report.html").read_text()
+            )
+
+    def test_model_mode_writes_group_overlap_split_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = self.rows()
+            for index, row in enumerate(rows):
+                row["account_id"] = f"account-{index // 2}"
+                row["_ml_partition"] = "train" if index < 61 else "holdout"
+            source = root / "data.csv"
+            output = root / "artefacts"
+            write_csv(source, rows)
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "model",
+                "--task",
+                "classification",
+                "--target",
+                "churned",
+                "--group-column",
+                "account_id",
+                "--split-strategy",
+                "grouped",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(completed.returncode, 2, completed.stderr)
+            manifest = json.loads((output / "split_manifest.json").read_text())
+            audit = manifest["audits"]["group_overlap"]
+            self.assertTrue(audit["checked"])
+            self.assertEqual(audit["groups_spanning_partitions"], 1)
+            self.assertIn(
+                "groups_span_partitions",
+                {finding["code"] for finding in manifest["blockers"]},
+            )
+            self.assertFalse(manifest["provenance"]["sealed_target_values_inspected"])
+
+    def test_remote_preflight_fails_before_network_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            completed = run(
+                PROFILE,
+                "--input",
+                "https://example.invalid/large.csv",
+                "--output-dir",
+                Path(directory) / "artefacts",
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("failed closed before scanning", completed.stderr)
+            self.assertIn("--expected-source-bytes", completed.stderr)
+            self.assertIn("--remote-source-version", completed.stderr)
+
+    def test_declared_remote_version_is_not_claimed_as_verified(self):
+        args = SimpleNamespace(
+            input="https://example.test/data.parquet",
+            expected_source_bytes=1000,
+            expected_source_rows=100,
+            remote_source_version="declared-etag",
+            allow_unknown_remote_preflight=False,
+        )
+        preflight = PROFILER.remote_preflight(args)
+        source = PROFILER.remote_source_contract(args, preflight)
+        self.assertEqual(source["version_verification"], "declared_not_verified")
+        self.assertEqual(
+            source["reproducibility_status"],
+            "limited_remote_source",
+        )
+
+    def test_panel_time_series_reports_bounded_series_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            for store in range(15):
+                for day in range(4):
+                    rows.append(
+                        {
+                            "store_id": f"store-{store}",
+                            "date": f"2025-01-{day + 1:02d}",
+                            "demand": store + day,
+                        }
+                    )
+            source = root / "panel.csv"
+            output = root / "artefacts"
+            write_csv(source, rows)
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "analysis-only",
+                "--task",
+                "time-series",
+                "--target",
+                "demand",
+                "--time-column",
+                "date",
+                "--group-column",
+                "store_id",
+                "--max-panel-series",
+                "5",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report = json.loads((output / "data_profile.json").read_text())
+            coverage = report["panel_coverage"]
+            self.assertEqual(coverage["series_count"], 15)
+            self.assertEqual(len(coverage["representative_series"]), 5)
+
+    def test_model_panel_coverage_includes_holdout_only_series(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            for store in range(3):
+                for day in range(4):
+                    rows.append(
+                        {
+                            "store_id": f"store-{store}",
+                            "date": f"2025-01-{day + 1:02d}",
+                            "demand": store + day,
+                            "_ml_partition": "holdout" if store == 2 else "train",
+                        }
+                    )
+            source = root / "panel.csv"
+            output = root / "artefacts"
+            write_csv(source, rows)
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "model",
+                "--task",
+                "time-series",
+                "--target",
+                "demand",
+                "--time-column",
+                "date",
+                "--group-column",
+                "store_id",
+                "--split-strategy",
+                "grouped",
+                "--max-panel-series",
+                "5",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            report = json.loads((output / "data_profile.json").read_text())
+            self.assertEqual(report["panel_coverage"]["series_count"], 3)
+            self.assertEqual(report["analysis_population"]["rows"], 12)
+            self.assertEqual(report["target_aware_population"]["rows"], 8)
+
+    def test_known_series_temporal_policy_allows_declared_group_overlap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            for store in range(3):
+                for day in range(4):
+                    rows.append(
+                        {
+                            "store_id": f"store-{store}",
+                            "date": f"2025-01-{day + 1:02d}",
+                            "demand": store + day,
+                            "_ml_partition": "train" if day < 2 else "holdout",
+                        }
+                    )
+            source = root / "panel.csv"
+            output = root / "artefacts"
+            write_csv(source, rows)
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "model",
+                "--task",
+                "time-series",
+                "--target",
+                "demand",
+                "--time-column",
+                "date",
+                "--group-column",
+                "store_id",
+                "--split-strategy",
+                "grouped_temporal",
+                "--group-overlap-policy",
+                "known_series_temporal",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            manifest = json.loads((output / "split_manifest.json").read_text())
+            self.assertTrue(manifest["audits"]["group_overlap"]["allowed"])
+            self.assertEqual(
+                manifest["audits"]["group_overlap"]["groups_spanning_partitions"],
+                3,
+            )
+            self.assertTrue(manifest["audits"]["temporal_order"]["valid"])
+
+    def test_known_entity_temporal_policy_allows_future_event_classification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            for account in range(3):
+                for day in range(4):
+                    rows.append(
+                        {
+                            "account_id": f"account-{account}",
+                            "date": f"2025-01-{day + 1:02d}",
+                            "feature": account + day,
+                            "outcome": day % 2,
+                            "_ml_partition": "train" if day < 2 else "holdout",
+                        }
+                    )
+            source = root / "events.csv"
+            output = root / "artefacts"
+            write_csv(source, rows)
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "model",
+                "--task",
+                "classification",
+                "--target",
+                "outcome",
+                "--time-column",
+                "date",
+                "--group-column",
+                "account_id",
+                "--split-strategy",
+                "temporal",
+                "--group-overlap-policy",
+                "known_entity_temporal",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            manifest = json.loads((output / "split_manifest.json").read_text())
+            self.assertTrue(manifest["audits"]["group_overlap"]["allowed"])
+            self.assertTrue(manifest["audits"]["temporal_order"]["valid"])
+
+    def test_temporal_split_blocks_missing_timestamps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = self.rows()
+            for index, row in enumerate(rows):
+                row["_ml_partition"] = "train" if index < 60 else "holdout"
+            rows[0]["event_time"] = ""
+            source = root / "data.csv"
+            output = root / "artefacts"
+            write_csv(source, rows)
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "model",
+                "--task",
+                "classification",
+                "--target",
+                "churned",
+                "--time-column",
+                "event_time",
+                "--split-strategy",
+                "temporal",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(completed.returncode, 2, completed.stderr)
+            manifest = json.loads((output / "split_manifest.json").read_text())
+            self.assertFalse(manifest["audits"]["temporal_order"]["valid"])
+
+    def test_grouped_split_blocks_missing_group_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = self.rows()
+            for index, row in enumerate(rows):
+                row["account_id"] = "" if index == 0 else f"account-{index // 2}"
+                row["_ml_partition"] = "train" if index < 60 else "holdout"
+            source = root / "data.csv"
+            output = root / "artefacts"
+            write_csv(source, rows)
+            completed = run(
+                PROFILE,
+                "--input",
+                source,
+                "--output-dir",
+                output,
+                "--mode",
+                "model",
+                "--task",
+                "classification",
+                "--target",
+                "churned",
+                "--group-column",
+                "account_id",
+                "--split-strategy",
+                "grouped",
+                "--engine",
+                "pandas",
+            )
+            self.assertEqual(completed.returncode, 2, completed.stderr)
+            manifest = json.loads((output / "split_manifest.json").read_text())
+            self.assertIn(
+                "missing_split_group",
+                {item["code"] for item in manifest["blockers"]},
             )
 
     def test_single_class_training_target_is_a_blocker(self):
@@ -169,6 +747,8 @@ class ProfileDatasetTests(unittest.TestCase):
                 "classification",
                 "--target",
                 "churned",
+                "--split-strategy",
+                "stratified_random",
             )
             self.assertEqual(completed.returncode, 2, completed.stderr)
             report = json.loads((output / "data_profile.json").read_text())
@@ -177,7 +757,7 @@ class ProfileDatasetTests(unittest.TestCase):
                 {finding["code"] for finding in report["findings"]},
             )
 
-    def test_rare_class_checks_use_full_training_population_not_plot_sample(self):
+    def test_nested_cv_global_profile_is_target_blind(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             rows = []
@@ -210,14 +790,19 @@ class ProfileDatasetTests(unittest.TestCase):
                 "pandas",
                 "--evaluation-design",
                 "nested_cv",
+                "--split-strategy",
+                "stratified_random",
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             report = json.loads((output / "data_profile.json").read_text())
-            self.assertEqual(report["columns"]["target"]["unique_count"], 2)
-            self.assertNotIn(
-                "single_class_target",
-                {finding["code"] for finding in report["findings"]},
+            self.assertEqual(
+                report["target_summary"]["status"],
+                "not_generated",
             )
+            self.assertFalse(report["target_summary"]["target_values_inspected"])
+            self.assertFalse(report["columns"]["target"]["values_inspected"])
+            self.assertTrue(report["nested_cv_global_profile_target_blind"])
+            self.assertFalse((output / "figures/target_distribution.png").exists())
             config = json.loads((output / "config.json").read_text())
             self.assertEqual(config["evaluation"]["design"], "nested_cv")
             self.assertEqual(config["evaluation"]["final_eval_set"], "outer_cv")
@@ -313,6 +898,37 @@ class ValidateRunTests(unittest.TestCase):
         self.assertTrue(any("domain_owner" in error for error in errors))
         self.assertTrue(any("human_oversight" in error for error in errors))
         self.assertTrue(any("recorded approval" in error for error in errors))
+
+    def test_zero_row_json_requires_schema_envelope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            envelope = root / "envelope.json"
+            envelope.write_text(
+                json.dumps({"columns": ["row_id", "score"], "rows": []})
+            )
+            errors = []
+            columns, rows = VALIDATOR.read_inference_output(
+                envelope,
+                {"format": "json"},
+                "case",
+                errors,
+            )
+            self.assertEqual(errors, [])
+            self.assertEqual(columns, ["row_id", "score"])
+            self.assertEqual(rows, [])
+
+            bare = root / "bare.json"
+            bare.write_text("[]")
+            errors = []
+            columns, rows = VALIDATOR.read_inference_output(
+                bare,
+                {"format": "json"},
+                "case",
+                errors,
+            )
+            self.assertIsNone(columns)
+            self.assertIsNone(rows)
+            self.assertTrue(any("schema-bearing" in error for error in errors))
 
     def test_valid_analysis_only_artifacts_pass(self):
         with tempfile.TemporaryDirectory() as directory:

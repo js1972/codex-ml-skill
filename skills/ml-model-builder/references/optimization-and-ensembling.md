@@ -67,8 +67,10 @@ outer training fold and never expose the active outer-fold targets.
 
 ## Search design
 
-1. Select eligible families from the task/data reference.
-2. Give each family a small, comparable initial design.
+1. Freeze membership and suitability from task, data and deployment criteria,
+   even if package state is already known, before any dependency probe.
+2. Give each runnable family a small, comparable initial design and disclose
+   any roster coverage gap.
 3. Run separate conditional search spaces per family or a correctly
    conditional joint study.
 4. Optimize the agreed primary validation metric.
@@ -88,10 +90,15 @@ Ask for an elapsed-time/compute budget. If unspecified:
 - continue adaptive search while meaningful improvements occur;
 - enforce a finite failsafe appropriate to the environment.
 
+Do not use a vague “insufficient budget” reason to omit a family. Use
+`deferred_by_budget` only after its dependency is available and record the
+approved wall-time/compute cap, estimated time or trials for minimum coverage,
+remaining budget and numerical shortfall.
+
 Define convergence before the run using:
 
 - minimum completed trials per family;
-- patience on the cross-validated incumbent;
+- patience on the current best cross-validated candidate;
 - practical minimum improvement;
 - uncertainty/noise of the validation estimate;
 - remaining time.

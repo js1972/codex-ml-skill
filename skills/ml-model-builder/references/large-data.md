@@ -3,6 +3,7 @@
 ## Contents
 
 - [Preflight](#preflight)
+- [Panel time-series profiling](#panel-time-series-profiling)
 - [Choose the execution location](#choose-the-execution-location)
 - [Larger than memory but fits local disk](#larger-than-memory-but-fits-local-disk)
 - [Larger than the local machine](#larger-than-the-local-machine)
@@ -26,6 +27,29 @@ Before loading data, record:
 CSV can expand several times in memory. Wide strings and categoricals are
 especially unpredictable. Do not “try pandas and see” when the estimate is near
 the host limit; an out-of-memory kill can lose the entire process.
+
+For remote/object-store inputs, supply `--expected-source-bytes` and an
+immutable `--remote-source-version` such as an object version, ETag or snapshot
+ID. Supply `--expected-source-rows` when known, but do not use row count alone
+to infer scan, disk or memory cost. Fail closed when byte cost or source
+identity is unknown. Use `--allow-unknown-remote-preflight` only after explicit
+acceptance of bounded scan/cost risk, and record the override. For warehouses,
+use dry-run/query-plan estimates and immutable table/snapshot identifiers.
+The generic URL profiler records a supplied version as declared but unverified
+and marks reproducibility limited because it cannot prove that the scan URL was
+bound to that version. Claim exact reproducibility only when a native
+object-store/warehouse client verifies the requested version or the input is
+content-hashed.
+
+## Panel time-series profiling
+
+Compute full-population series counts, row-count/coverage distributions, date
+ranges and gap summaries where the source engine can aggregate them safely.
+Do not materialize or plot every series. Bound detailed local diagnostics with
+`--max-panel-series` (default 12), select series deterministically, and record
+the selection rule. Pull only aggregated profiles and bounded traces from a
+remote panel. Run rolling-origin and per-horizon validation separately; the
+profiler does not establish forecast validity.
 
 ## Choose the execution location
 

@@ -11,7 +11,8 @@
 ## When to run
 
 Run only after explicit opt-in. Explain that AutoGluon adds a large optional
-dependency set and extra runtime.
+dependency set and extra runtime. Do not probe or install it while preparing
+the ordinary environment-independent candidate roster.
 
 Skip or reframe when:
 

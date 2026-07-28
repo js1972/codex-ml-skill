@@ -12,16 +12,20 @@
 ## Shared workflow
 
 1. Confirm row grain, target definition, prediction moment and error costs.
-2. Reconcile the source-row grain with the decision/action grain. Aggregate,
+2. Define the eligible cohort, label-observation process and any case-control
+   or negative sampling before splitting.
+3. Reconcile the source-row grain with the decision/action grain. Aggregate,
    deduplicate or rank entities explicitly so frequent entities are not
    accidentally overweighted and one action does not appear multiple times.
-3. Select group/time-aware validation before target-aware EDA.
-4. Establish a naive reference and fixed simple model.
-5. Compare eligible candidates using identical folds and preprocessing
+4. Select group/time-aware validation before target-aware EDA.
+5. Establish a naive reference and fixed simple model, and record whether a
+   valid incumbent is available.
+6. Compare eligible candidates using identical folds and preprocessing
    boundaries.
-6. Select thresholds/calibration/transforms on validation only.
-7. Refit the frozen pipeline on the permitted development population.
-8. Evaluate using the declared holdout, untouched outer folds, external set, or
+7. Select thresholds/calibration/transforms on validation only.
+8. Finalize the complete fitted pipeline on the permitted development
+   population.
+9. Evaluate using the declared holdout, untouched outer folds, external set, or
    prospective cohort and report uncertainty and slices.
 
 Use multiple metrics, but designate one primary selection metric from the
@@ -66,13 +70,25 @@ impact, and record feedback-loop risk when prior actions affect labels.
   precision/recall.
 - Evaluate calibration with reliability plots, Brier/log loss and expected
   calibration error where useful.
-- Fit Platt/isotonic calibration inside nested or held-out validation. Do not
-  calibrate on holdout.
+- Fit calibration from out-of-fold predictions, a disjoint calibration split,
+  or a calibrated-CV ensemble. Preserve group/time structure and place the
+  complete calibration and threshold procedure inside each outer-training
+  partition under nested CV.
+- Freeze final-fit semantics before evaluation: deploy the calibrated-CV
+  ensemble, retain the base-fit/calibration split, or freeze an OOF-derived
+  mapping before refitting the base model on all permitted development rows
+  when predeclared. Document and check any prediction-distribution shift from
+  the refit.
+- Do not fit or revise calibration on final holdout/external/outer-fold
+  predictions.
 - Record the chosen threshold, rationale and fallback behavior.
 
 For fixed-capacity outreach or review, include precision/recall/lift at the
 actual capacity and simulate the scheduling unit (for example, per day), not
-only a global threshold.
+only a global threshold. Expose row-level `score_rows` separately from
+whole-batch `select_queue`: the latter applies eligibility, deterministic
+tie-breaking and top-k selection. Test empty, sub-capacity, tied and excluded
+batches; a row-wise threshold cannot promise exactly k selections.
 
 ### Uncertainty and slices
 
@@ -123,20 +139,32 @@ selection-biased; report sensitivity to the maturity rule.
 
 ## Candidate families
 
-Select families from data properties rather than enforcing artificial
-diversity:
+Freeze the environment-independent roster from task, data and deployment
+criteria even when package state is already known. Consider:
 
 - regularized linear/logistic models;
 - HistGradientBoosting;
 - RandomForest/ExtraTrees when memory permits;
-- XGBoost, LightGBM or CatBoost when available;
+- XGBoost, LightGBM and CatBoost when their objectives, categorical handling
+  and resource needs fit;
 - native categorical models for high-cardinality categoricals;
 - KNN only for suitably scaled, low/moderate-dimensional data;
 - Naive Bayes only when its distribution/input assumptions are plausible.
 
 ElasticNet does not create interactions unless interaction features are
 explicitly supplied. GaussianNB may require dense input and can be unsafe for
-large one-hot matrices.
+large one-hot matrices. Install normal selected dependencies in the project
+environment as defined in `governance.md`; XGBoost, LightGBM and CatBoost are
+normal modeling dependencies unless a concrete incompatibility or resource
+constraint applies. Missing packages do not make a family unsuitable.
+
+Include exactly one `xgboost`, `lightgbm` and `catboost` row in every supervised
+candidate ledger, even when excluded or not run. Use only the status vocabulary
+and state combinations in `governance.md`, including a non-empty
+`consideration_basis` derived only from task/data/deployment fit. Give
+exclusions environment-independent reasons and quantify every budget deferral.
+Record installation/runtime failures and roster coverage gaps. Keep AutoGluon
+outside this roster unless the user opts in.
 
 ## Small, wide, and large data
 
@@ -159,6 +187,8 @@ Freeze:
 - expected input schema;
 - random seed and dependency versions.
 
-Then refit on the permitted development data and evaluate according to the
-declared design. If the final refit changes model behavior materially, report
-the risk and retain the validation-fitted candidate for comparison.
+Then construct the declared final fitted object, including calibration and
+post-processing, and evaluate it according to the declared design. Do not
+describe a base-estimator-only refit as the finalized calibrated pipeline. If
+the final refit changes model behavior materially, report the risk and retain
+the validation-fitted candidate for comparison.

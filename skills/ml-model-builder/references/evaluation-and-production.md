@@ -4,6 +4,8 @@
 
 - [Honest evaluation](#honest-evaluation)
 - [Evaluation design choices](#evaluation-design-choices)
+- [Improvement evidence lineage](#improvement-evidence-lineage)
+- [Incumbent comparison](#incumbent-comparison)
 - [Uncertainty and practical value](#uncertainty-and-practical-value)
 - [Error and subgroup analysis](#error-and-subgroup-analysis)
 - [Explainability](#explainability)
@@ -15,9 +17,12 @@
 
 - Select model family, hyperparameters, features, threshold, calibration and
   post-processing without holdout/external targets or the active outer fold.
-- Refit the frozen pipeline on train+validation when methodologically valid.
-- Evaluate once on the declared final evaluation population using the same
-  metric implementation and data contract.
+- For holdout/external designs, refit the frozen pipeline on permitted
+  development data when methodologically valid, then evaluate once on the
+  declared final population with the same metric implementation and contract.
+- For nested CV, use outer folds to estimate the complete selection procedure.
+  After locking it, run that procedure on all permitted data for deployment;
+  do not call this specific full-data refit independently tested.
 - Report development/inner evidence separately from final/outer evidence.
 - If final evidence influences a later choice, stop calling it unbiased.
 
@@ -43,6 +48,45 @@ both inner and outer resampling.
 If data are too small for any design to estimate the critical harm/rare-class
 metric, report **evaluation insufficient** rather than manufacturing a score.
 
+For selectively observed outcomes, state whether each result estimates
+performance on historically labeled support, the full eligible population or
+the enacted review/treatment queue. A prospective cohort is not sufficient by
+itself when the incumbent or candidate policy still determines which outcomes
+become observable; predeclare the representative audit, randomized allocation
+or other identified label-acquisition design.
+
+## Improvement evidence lineage
+
+Preserve parent and ancestor final evidence through append-only references in
+each improvement run. Keep these references separate from the current run's
+own final-evaluation exposure. For every prior result that was inspected or
+used, record its run ID, immutable artifact hashes, evaluation-population
+fingerprint, first-opened time and purpose, values viewed, and the descendant
+decisions it influenced.
+
+Do not mutate an immutable parent when its result later influences a
+descendant. Append that influence event to the descendant's lineage instead.
+Do not re-seal the same evaluation population under a new run or filename. If
+parent evidence influenced the hypothesis, feature set, roster, calibration,
+threshold or deployment choice, treat it as benchmark-selection evidence for
+the descendant and require untouched future/external evidence for a new
+unbiased claim.
+
+## Incumbent comparison
+
+Ask whether an incumbent model, rule or verified historical benchmark exists
+and record the answer. Compare an available incumbent only when its version,
+prediction contract, cohort and metric implementation can be aligned with the
+candidate. If no valid incumbent exists, say so and use the declared naive and
+fixed baselines; do not block completion or manufacture one.
+
+When candidate and incumbent policies select different rows and selection
+controls label observation, comparing outcomes only among each policy's
+observed selections is not a fair same-population comparison. Use independent
+representative labels, a randomized/interleaved experiment, or a justified
+off-policy design with support, exchangeability and policy-grain propensities.
+Otherwise report the comparison as unidentified.
+
 ## Uncertainty and practical value
 
 Report more than a point estimate:
@@ -55,6 +99,20 @@ Report more than a point estimate:
 
 Do not use “within margin of error” without estimating uncertainty. A
 statistically detectable gain can still be operationally irrelevant.
+
+For fixed-capacity decisions, retain complete eligible scheduling batches in
+each resample or evaluation fold. Recompute scores and rerun the entire queue
+policy—including eligibility, entity caps/deduplication, tie-breaking and
+top-k selection—before recalculating the metric. Never bootstrap only the
+already selected rows or their scores.
+
+Preserve both repeated-entity and serial time dependence using an appropriate
+declared design, such as paired scheduling periods, entity clusters, temporal
+blocks or a justified multiway procedure. Candidate-incumbent intervals should
+use paired differences on the same resampled batches or the experiment's
+assignment units. Report the number of independent scheduling periods and
+events; weighting uncertainty and effective sample size do not remove
+unidentified selective-label bias.
 
 ## Error and subgroup analysis
 
@@ -96,10 +154,18 @@ an approved sample, not on sealed holdout before final evaluation.
 
 ## Inference testing
 
+Run the real inference entry point on a nonempty fixture and retain its actual
+output. Do not substitute a schema-only check, mocked predictor or copied
+expected file. Verify finite values, row/identifier alignment, output column
+semantics and task constraints such as probability bounds, forecast horizons
+or anomaly-score direction.
+
 Test:
 
 - a representative batch round-trip;
-- one row and empty input;
+- one row;
+- empty input, expecting either an empty output with the exact schema or the
+  documented actionable rejection;
 - missing optional and required columns;
 - extra columns;
 - wrong dtypes/units/timezones;
@@ -109,7 +175,9 @@ Test:
 - target and post-event columns are not required.
 
 Compare generated predictions with the saved expected/golden sample within a
-documented tolerance.
+documented tolerance. For capacity workflows, test `score_rows` independently
+from whole-batch `select_queue`, including empty, sub-capacity, tied and
+ineligible batches.
 
 ## Security and dependencies
 

@@ -4,6 +4,7 @@
 
 - [Data contract](#data-contract)
 - [Target and prediction moment](#target-and-prediction-moment)
+- [Cohort and label observation](#cohort-and-label-observation)
 - [Split decision](#split-decision)
 - [Leakage audit](#leakage-audit)
 - [Preprocessing decisions](#preprocessing-decisions)
@@ -19,6 +20,8 @@ Record:
 - decision/action grain when it differs from a source row;
 - schema, units, timezone and semantic type;
 - target definition and label-generation timestamp;
+- source population, eligibility, cohort dates and sampling mechanism;
+- label-observation mechanism and inclusion probabilities or weights;
 - prediction/scoring moment;
 - feature availability and update cadence;
 - join/concat rules and expected cardinality;
@@ -51,6 +54,58 @@ feature timestamp and each validation cutoff that is at least the outcome
 window plus known ingestion delay. Apply this at every temporal fold, not only
 the final holdout.
 
+## Cohort and label observation
+
+Define the modeling cohort before splitting. Record the source population,
+index/as-of date, eligibility and exclusion rules, observation window, outcome
+ascertainment, and every case-control, negative-sampling or review-selection
+stage.
+
+- Do not treat an unreviewed, unobserved or not-yet-mature label as negative.
+- Describe what makes a label observable when review, treatment or prior policy
+  selects labeled rows. Use propensity weighting only with justified
+  exchangeability and positivity; otherwise report the unidentified bias.
+- When constructing a sample, split the eligible population first and apply
+  negative sampling only within training folds. If the source is already
+  sampled, preserve its design and obtain an unsampled, representative
+  evaluation and calibration population whenever population probabilities,
+  precision or workload estimates matter.
+- Record sampling probabilities and use design-valid training/evaluation
+  weights when needed. State the assumptions; weighting does not repair labels
+  missing not at random.
+- Correct case-control prevalence before interpreting calibrated
+  probabilities, predictive values or thresholds. Report both weighted
+  population estimates and unweighted sample support when weights are used.
+- Preserve group, time and source structure during sampling, weighting and
+  evaluation. Check weight concentration and effective sample size.
+
+When review, treatment or a prior policy controls which labels become
+observable, define a label-acquisition and policy-evaluation contract before
+training or making performance claims. Record:
+
+- the action and label-observation grain and whether the action can change the
+  outcome rather than merely reveal it;
+- the acquisition policy and version for each period, including randomized
+  audit/exploration allocation and logged selection probabilities at the row,
+  entity or whole-batch policy grain as applicable;
+- the estimand: performance on historically labeled cases, the full eligible
+  population, or the queue produced by a specified policy;
+- support/positivity and exchangeability assumptions, weight concentration and
+  effective sample size;
+- how candidate and incumbent outcomes will be obtained on comparable eligible
+  populations for evaluation and calibration.
+
+A deterministic historical policy has no support where its selection
+probability is zero. Row-level propensity weighting cannot repair that, and it
+may also be insufficient for a batch-relative top-k policy whose actions depend
+on the other eligible rows. Require an independently labeled representative
+sample, randomized exploration, or a prospective randomized/interleaved policy
+comparison when those regions or policies matter. Silent prospective scoring
+does not create validation labels when only reviewed or treated cases reveal
+the outcome. If valid label acquisition is unavailable, scope metrics and
+calibration claims to the observed support and report population or alternative
+policy performance as unidentified.
+
 ## Split decision
 
 Choose splits in this order:
@@ -63,6 +118,27 @@ Choose splits in this order:
    reproduces the deployment scenario.
 4. Otherwise use stratified random splits for classification and random splits
    for regression.
+
+For future-event classification or regression that will score later rows from
+known entities, use a declared `known_entity_temporal` overlap policy rather
+than forcing a cold-start group split. The same entity may appear in an earlier
+training period and a later evaluation period only when:
+
+- known-entity recurrence is part of the deployment contract;
+- partitions remain strictly chronological and duplicate/source-event rows do
+  not cross them;
+- every feature and historical aggregate is reconstructed as of the fold's
+  scoring origin, and every training label was observable by that origin;
+- target encoders, preprocessing, permutation and resampling preserve the same
+  causal time boundary;
+- the manifest records the intentional entity overlap, time direction and
+  support, and results report known-entity and cold-start/new-entity slices
+  separately when both occur in production.
+
+This policy does not permit random entity overlap, future-informed histories,
+or splitting rows from the same contemporaneous action/source event. Use a
+group-disjoint policy when deployment is for unseen entities or when safe
+as-of reconstruction is unavailable.
 
 Do not select a split solely from row count. Check that every evaluation fold
 has enough target events, horizon coverage and representative entities. For
@@ -116,7 +192,12 @@ Make transformations conditional on task and model:
   Prefer robust models/losses before deletion or winsorization.
 - **Categoricals:** handle unseen values. Use one-hot for manageable
   cardinality; consider native categorical models, hashing or frequency
-  encoding for high cardinality. Fit encoders inside folds.
+  encoding for high cardinality. Fit encoders inside folds. For target
+  encoding, generate training values by cross-fitting, ordered encoding or a
+  smoothed leave-one-out scheme, then fit the validation/inference mapping on
+  the corresponding training fold only. Preserve group and time boundaries;
+  leave-one-row-out encoding is not safe when related rows or future outcomes
+  remain in the encoding pool.
 - **Resampling:** prefer appropriate metrics, class weights and threshold
   selection before SMOTE. If used, choose SMOTE/SMOTENC appropriately and run
   it only inside training folds. Never use it for temporal data without a
@@ -151,6 +232,8 @@ Save a machine-readable contract containing:
   features;
 - current as-of scoring-population and eligibility rules when producing an
   operational queue or outreach list;
+- sampling-weight and label-observation semantics when training data are not a
+  representative cohort;
 - behavior for extra/missing columns and unseen categories;
 - model/dependency version and trusted-artifact warning.
 

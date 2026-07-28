@@ -3,6 +3,7 @@
 ## Contents
 
 - [When this applies](#when-this-applies)
+- [Risk assessment](#risk-assessment)
 - [Required gate](#required-gate)
 - [Evidence standard](#evidence-standard)
 - [Operational safeguards](#operational-safeguards)
@@ -17,6 +18,19 @@ harm as high stakes even if average impact is modest.
 
 The skill provides technical workflow guidance, not legal, clinical, actuarial,
 credit-risk, or regulatory approval.
+
+## Risk assessment
+
+Assess risk explicitly before assigning a standard tier. Record the affected
+population, decision authority and automation level; harm severity,
+likelihood, reversibility and scale; vulnerable groups and proxy attributes;
+feedback loops; misuse paths; and consequences of abstention, delay and model
+error. Keep `governance.risk_tier` as `not_assessed` until this review is
+complete. When uncertain, apply the stronger safeguards and request domain
+review. Pass the current `not_assessed`, `standard` or `high` value to the
+profiler with `--risk-tier`; do not let its default make the decision.
+Use `not_assessed` only during initial profiling and resolve it before a model
+run or deployment recommendation.
 
 ## Required gate
 
@@ -46,6 +60,10 @@ silent prospective validation. Do not recommend autonomous action.
   deployment shift.
 - Audit label delay, selective labeling, treatment/policy feedback and
   historical inequity.
+- Keep prospective outcomes pending until their declared maturity date. Report
+  scored, matured, pending and lost-to-follow-up counts; never convert pending
+  labels to negatives or publish performance before sufficient outcomes
+  mature.
 - Assess calibration, abstention/coverage, worst-supported subgroups and
   out-of-distribution behavior.
 
@@ -77,12 +95,14 @@ The model card and results must state:
 
 - intended and prohibited uses;
 - population, sites, periods and exclusions represented;
+- risk assessment, tier rationale and unresolved hazards;
 - validation design and independence limitations;
 - critical metric point estimates, uncertainty and support;
 - calibration/abstention and subgroup findings;
 - label and causal limitations;
 - known failure modes and out-of-distribution policy;
 - whether use is research, silent validation, decision support, or autonomous;
+- prospective cohort dates, label-maturity rule and pending outcome counts;
 - remaining approvals and evidence required.
 
 When evidence is insufficient, lead with that conclusion. Do not bury it below

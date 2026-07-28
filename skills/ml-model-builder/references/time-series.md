@@ -4,6 +4,7 @@
 
 - [Choose the correct problem](#choose-the-correct-problem)
 - [Forecast contract](#forecast-contract)
+- [Panel profiling](#panel-profiling)
 - [Validation](#validation)
 - [Baselines and models](#baselines-and-models)
 - [Multi-horizon strategy](#multi-horizon-strategy)
@@ -25,6 +26,11 @@ Do not call per-row payment-delay regression “time-series forecasting” merel
 because it has dates. Route survival/censoring problems explicitly; ordinary
 regression can bias labels when outcomes have not matured.
 
+Future-event classification or regression for recurring known entities remains
+a supervised tabular task. Use the declared `known_entity_temporal` policy from
+`data-and-leakage.md` when later rows for known entities match deployment; do
+not relabel the task as forecasting merely to permit entity overlap.
+
 ## Forecast contract
 
 Record:
@@ -39,6 +45,16 @@ Record:
 - update cadence and retraining frequency;
 - cold-start behavior for new entities;
 - operational cost of late/early or under/over forecasts.
+
+## Panel profiling
+
+Report target-blind full-population series counts and distributions of history
+length, coverage and gaps. Compute target levels, zeros and other
+value-dependent diagnostics only on the permitted development or
+backtest-training population. Bound detailed traces to at most the configured
+`--max-panel-series` sample (default 12), record its deterministic selection,
+and do not infer panel-wide quality from those examples. Aggregate large remote
+panels near the source as described in `large-data.md`.
 
 ## Validation
 
