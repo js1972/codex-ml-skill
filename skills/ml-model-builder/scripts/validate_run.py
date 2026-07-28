@@ -185,6 +185,36 @@ def is_finite_number(value) -> bool:
     )
 
 
+def validate_known_metric_value(metric, value, field: str, errors: list[str]):
+    if not is_finite_number(value):
+        return
+    bounded = {
+        "accuracy",
+        "average_precision",
+        "balanced_accuracy",
+        "brier_score",
+        "f1",
+        "macro_f1",
+        "precision",
+        "recall",
+        "roc_auc",
+    }
+    non_negative = {
+        "brier_score",
+        "log_loss",
+        "mae",
+        "mape",
+        "mean_absolute_error",
+        "mean_squared_error",
+        "pinball_loss",
+        "rmse",
+    }
+    if metric in bounded and not 0 <= value <= 1:
+        errors.append(f"{field} for {metric} must be between 0 and 1")
+    if metric in non_negative and value < 0:
+        errors.append(f"{field} for {metric} must be non-negative")
+
+
 def resolve_project_path(
     project: Path,
     value,
@@ -2083,6 +2113,432 @@ def validate_supervised_candidates(config, metrics, errors: list[str]):
             and is_positive_integer(best_result.get("completed_trials"))
             and is_finite_number(best_result.get("best_validation")),
             "metrics.json: search.best_family must have a successful family result",
+            errors,
+        )
+
+
+def validate_sap_rpt_comparison(
+    config,
+    metrics,
+    run_manifest,
+    results_text: str,
+    errors: list[str],
+):
+    comparison = config.get("comparison")
+    config_has_rpt = isinstance(comparison, dict) and "sap_rpt" in comparison
+    metrics_has_rpt = isinstance(metrics, dict) and "sap_rpt" in metrics
+    if not config_has_rpt and not metrics_has_rpt:
+        return
+
+    if not isinstance(comparison, dict):
+        errors.append(
+            "config.json: comparison object is required when SAP RPT evidence exists"
+        )
+        return
+    configured = comparison.get("sap_rpt")
+    observed = metrics.get("sap_rpt")
+
+    if configured is False:
+        if metrics_has_rpt:
+            require(
+                isinstance(observed, dict),
+                "metrics.json: sap_rpt must be an object when present",
+                errors,
+            )
+            if isinstance(observed, dict):
+                require(
+                    observed.get("attempted") is False,
+                    "metrics.json: sap_rpt cannot be attempted when "
+                    "config comparison.sap_rpt is false",
+                    errors,
+                )
+                require(
+                    is_nonempty_string(observed.get("reason")),
+                    "metrics.json: unattempted sap_rpt comparison requires a reason",
+                    errors,
+                )
+        return
+
+    if not isinstance(configured, dict):
+        errors.append(
+            "config.json: comparison.sap_rpt must be false or an opt-in object"
+        )
+        return
+    require(
+        configured.get("opted_in") is True,
+        "config.json: comparison.sap_rpt.opted_in must be true",
+        errors,
+    )
+    require(
+        configured.get("role") == "benchmark_only",
+        "config.json: comparison.sap_rpt.role must be benchmark_only",
+        errors,
+    )
+    installation = configured.get("installation")
+    require(
+        isinstance(installation, dict),
+        "config.json: comparison.sap_rpt.installation object is required",
+        errors,
+    )
+    if isinstance(installation, dict):
+        require(
+            is_nonempty_string(installation.get("repository")),
+            "config.json: comparison.sap_rpt.installation.repository is required",
+            errors,
+        )
+        require(
+            installation.get("user_managed") is True,
+            "config.json: SAP RPT private installation must be user_managed",
+            errors,
+        )
+
+    if not isinstance(observed, dict):
+        errors.append("metrics.json: sap_rpt object is required after SAP RPT opt-in")
+        return
+    attempted = observed.get("attempted")
+    status = observed.get("status")
+    require(
+        isinstance(attempted, bool),
+        "metrics.json: sap_rpt.attempted must be boolean",
+        errors,
+    )
+    require(
+        observed.get("role") == "benchmark_only",
+        "metrics.json: sap_rpt.role must be benchmark_only",
+        errors,
+    )
+
+    selected_model = normalize_family(nested(metrics, "selection", "model"))
+    require(
+        not (selected_model == "rpt" or selected_model.startswith("saprpt")),
+        "metrics.json: SAP RPT cannot be the deployable selection.model",
+        errors,
+    )
+    best_family = normalize_family(nested(metrics, "search", "best_family"))
+    require(
+        not (best_family == "rpt" or best_family.startswith("saprpt")),
+        "metrics.json: SAP RPT must remain outside search.best_family",
+        errors,
+    )
+
+    if attempted is not True:
+        require(
+            status == "not_attempted",
+            "metrics.json: unattempted sap_rpt status must be not_attempted",
+            errors,
+        )
+        require(
+            is_nonempty_string(observed.get("reason")),
+            "metrics.json: unattempted sap_rpt comparison requires a reason",
+            errors,
+        )
+        require(
+            observed.get("development") is None and observed.get("final") is None,
+            "metrics.json: unattempted sap_rpt comparison cannot claim evaluation "
+            "evidence",
+            errors,
+        )
+        return
+
+    require(
+        status in {"completed", "failed"},
+        "metrics.json: attempted sap_rpt status must be completed or failed",
+        errors,
+    )
+    if isinstance(installation, dict):
+        require(
+            installation.get("configured_by_user") is True,
+            "config.json: attempted SAP RPT requires user-completed configuration",
+            errors,
+        )
+    transfer = configured.get("external_data_transfer")
+    require(
+        isinstance(transfer, dict),
+        "config.json: attempted SAP RPT requires external_data_transfer",
+        errors,
+    )
+    if isinstance(transfer, dict):
+        require(
+            transfer.get("confirmed") is True,
+            "config.json: attempted SAP RPT requires confirmed remote transfer",
+            errors,
+        )
+        require(
+            is_nonempty_string(transfer.get("destination")),
+            "config.json: SAP RPT transfer destination is required",
+            errors,
+        )
+        require(
+            is_nonempty_string(transfer.get("scope")),
+            "config.json: SAP RPT transfer scope is required",
+            errors,
+        )
+
+    require(
+        nested(config, "problem", "task") in {"classification", "regression"},
+        "config.json: SAP RPT supports classification or regression only",
+        errors,
+    )
+    for field in (
+        "client_version",
+        "client_source_revision",
+        "endpoint",
+        "model_id",
+        "deployment_id",
+    ):
+        require(
+            is_nonempty_string(observed.get(field)),
+            f"metrics.json: sap_rpt.{field} is required for an attempted benchmark",
+            errors,
+        )
+    require(
+        observed.get("auth_mode") in {"playground", "btp"},
+        "metrics.json: sap_rpt.auth_mode must be playground or btp",
+        errors,
+    )
+
+    context = observed.get("context")
+    require(
+        isinstance(context, dict),
+        "metrics.json: sap_rpt.context object is required",
+        errors,
+    )
+    if isinstance(context, dict):
+        require(
+            is_nonempty_string(context.get("strategy")),
+            "metrics.json: sap_rpt.context.strategy is required",
+            errors,
+        )
+        require(
+            isinstance(context.get("seed"), int)
+            and not isinstance(context.get("seed"), bool),
+            "metrics.json: sap_rpt.context.seed must be an integer",
+            errors,
+        )
+        require(
+            is_positive_integer(context.get("rows")),
+            "metrics.json: sap_rpt.context.rows must be positive",
+            errors,
+        )
+        require(
+            context.get("training_only") is True,
+            "metrics.json: SAP RPT context must be training_only",
+            errors,
+        )
+        require(
+            is_sha256(context.get("fingerprint")),
+            "metrics.json: sap_rpt.context.fingerprint must be SHA-256",
+            errors,
+        )
+
+    split_fingerprint = observed.get("split_fingerprint")
+    require(
+        is_sha256(split_fingerprint),
+        "metrics.json: sap_rpt.split_fingerprint must be SHA-256",
+        errors,
+    )
+    manifest_split = run_manifest.get("split_fingerprint")
+    if is_sha256(split_fingerprint) and is_sha256(manifest_split):
+        require(
+            split_fingerprint.lower().removeprefix("sha256:")
+            == manifest_split.lower().removeprefix("sha256:"),
+            "metrics.json: sap_rpt.split_fingerprint must match run_manifest.json",
+            errors,
+        )
+
+    request_count = observed.get("request_count")
+    failed_request_count = observed.get("failed_request_count")
+    require(
+        is_positive_integer(request_count),
+        "metrics.json: attempted sap_rpt request_count must be positive",
+        errors,
+    )
+    require(
+        is_nonnegative_integer(failed_request_count),
+        "metrics.json: sap_rpt.failed_request_count must be non-negative",
+        errors,
+    )
+    if is_positive_integer(request_count) and is_nonnegative_integer(
+        failed_request_count
+    ):
+        require(
+            failed_request_count <= request_count,
+            "metrics.json: sap_rpt.failed_request_count cannot exceed request_count",
+            errors,
+        )
+    parse_timestamp(
+        observed.get("completed_at"),
+        "metrics.json: sap_rpt.completed_at",
+        errors,
+    )
+    require(
+        observed.get("reproducibility_status") == "limited_remote_service",
+        "metrics.json: sap_rpt.reproducibility_status must be limited_remote_service",
+        errors,
+    )
+    require(
+        isinstance(observed.get("selection_influenced"), bool),
+        "metrics.json: sap_rpt.selection_influenced must be boolean",
+        errors,
+    )
+    lower_results = results_text.lower()
+    require(
+        "limited_remote_service" in lower_results and "benchmark_only" in lower_results,
+        "results.md: attempted SAP RPT must disclose benchmark_only and "
+        "limited_remote_service",
+        errors,
+    )
+
+    if status == "failed":
+        require(
+            is_nonempty_string(observed.get("reason")),
+            "metrics.json: failed sap_rpt comparison requires a reason",
+            errors,
+        )
+        require(
+            is_positive_integer(failed_request_count),
+            "metrics.json: failed sap_rpt comparison requires a failed request",
+            errors,
+        )
+        require(
+            observed.get("development") is None and observed.get("final") is None,
+            "metrics.json: failed sap_rpt comparison cannot claim evaluation evidence",
+            errors,
+        )
+        require(
+            observed.get("selection_influenced") is False,
+            "metrics.json: failed sap_rpt comparison cannot influence selection",
+            errors,
+        )
+        return
+
+    if is_positive_integer(request_count) and is_nonnegative_integer(
+        failed_request_count
+    ):
+        require(
+            failed_request_count < request_count,
+            "metrics.json: completed sap_rpt comparison requires at least one "
+            "successful request",
+            errors,
+        )
+    require(
+        observed.get("reason") is None,
+        "metrics.json: completed sap_rpt comparison reason must be null",
+        errors,
+    )
+    development = observed.get("development")
+    require(
+        isinstance(development, dict),
+        "metrics.json: completed sap_rpt comparison requires development evidence",
+        errors,
+    )
+    primary_metric = nested(metrics, "primary_metric", "name")
+    if isinstance(development, dict):
+        require(
+            development.get("metric") == primary_metric,
+            "metrics.json: sap_rpt development metric must match primary metric",
+            errors,
+        )
+        require(
+            is_finite_number(development.get("score")),
+            "metrics.json: sap_rpt development score must be finite",
+            errors,
+        )
+        validate_known_metric_value(
+            primary_metric,
+            development.get("score"),
+            "metrics.json: sap_rpt development.score",
+            errors,
+        )
+        fold_scores = development.get("fold_scores")
+        if fold_scores is not None:
+            require(
+                isinstance(fold_scores, list)
+                and len(fold_scores) >= 2
+                and all(is_finite_number(value) for value in fold_scores),
+                "metrics.json: sap_rpt development.fold_scores must contain "
+                "at least two finite values",
+                errors,
+            )
+            if isinstance(fold_scores, list):
+                for index, value in enumerate(fold_scores):
+                    validate_known_metric_value(
+                        primary_metric,
+                        value,
+                        f"metrics.json: sap_rpt development.fold_scores[{index}]",
+                        errors,
+                    )
+
+    final = observed.get("final")
+    if final is not None:
+        require(
+            isinstance(final, dict),
+            "metrics.json: sap_rpt.final must be null or an object",
+            errors,
+        )
+        if isinstance(final, dict):
+            require(
+                final.get("metric") == primary_metric,
+                "metrics.json: sap_rpt final metric must match primary metric",
+                errors,
+            )
+            require(
+                is_finite_number(final.get("score")),
+                "metrics.json: sap_rpt final score must be finite",
+                errors,
+            )
+            validate_known_metric_value(
+                primary_metric,
+                final.get("score"),
+                "metrics.json: sap_rpt final.score",
+                errors,
+            )
+            expected_set = nested(config, "evaluation", "final_eval_set")
+            require(
+                final.get("eval_set") == expected_set
+                and final.get("eval_set") == nested(metrics, "final", "eval_set"),
+                "metrics.json: sap_rpt final eval_set must match the main final set",
+                errors,
+            )
+            expected_population = nested(
+                run_manifest,
+                "evaluation_exposure",
+                "population_fingerprint",
+            )
+            rpt_population = final.get("population_fingerprint")
+            require(
+                is_sha256(rpt_population),
+                "metrics.json: sap_rpt final population_fingerprint must be SHA-256",
+                errors,
+            )
+            if is_sha256(rpt_population) and is_sha256(expected_population):
+                require(
+                    rpt_population.lower().removeprefix("sha256:")
+                    == expected_population.lower().removeprefix("sha256:"),
+                    "metrics.json: sap_rpt final population must match the main "
+                    "evaluation population",
+                    errors,
+                )
+
+    if observed.get("selection_influenced") is True:
+        require(
+            nested(run_manifest, "evaluation_exposure", "status")
+            == "benchmark_selection",
+            "run_manifest.json: SAP RPT selection influence requires "
+            "benchmark_selection exposure",
+            errors,
+        )
+        require(
+            is_string_array(
+                nested(
+                    run_manifest,
+                    "evaluation_exposure",
+                    "decisions_influenced",
+                ),
+                nonempty=True,
+            ),
+            "run_manifest.json: SAP RPT selection influence requires recorded "
+            "decisions_influenced",
             errors,
         )
 
@@ -4075,17 +4531,26 @@ def validate_model(
             validate_supervised_cohort(config, schema, manifest, errors)
         validate_capacity_selection(config, errors)
     results_path = (artifacts if strict_21 else project) / "results.md"
+    results_text = ""
     if not results_path.exists():
         location = "run artifact" if strict_21 else "project-level"
         errors.append(f"missing {location} results.md")
-    elif not re.search(
-        r"prediction moment", results_path.read_text(encoding="utf-8"), re.IGNORECASE
-    ):
-        warnings.append("results.md does not mention the prediction moment")
+    else:
+        results_text = results_path.read_text(encoding="utf-8")
+        if not re.search(r"prediction moment", results_text, re.IGNORECASE):
+            warnings.append("results.md does not mention the prediction moment")
+    if strict_21:
+        validate_sap_rpt_comparison(
+            config,
+            metrics,
+            run_manifest,
+            results_text,
+            errors,
+        )
     if (
         limited_remote_source
         and results_path.exists()
-        and "limited_remote_source" not in results_path.read_text(encoding="utf-8")
+        and "limited_remote_source" not in results_text
     ):
         errors.append(
             "results.md: explicit remote fingerprint override must disclose "

@@ -8,6 +8,7 @@
 - [Run and split manifests](#run-and-split-manifests)
 - [config.json](#configjson)
 - [metrics.json](#metricsjson)
+- [SAP RPT optional comparison](#sap-rpt-optional-comparison)
 - [Task-specific evaluation contracts](#task-specific-evaluation-contracts)
 - [Data and inference contracts](#data-and-inference-contracts)
 - [Human-readable reports](#human-readable-reports)
@@ -67,6 +68,7 @@ Optional:
 
 - `<run-dir>/shap_summary.html`
 - `<run-dir>/autogluon_predictor/`
+- `<run-dir>/sap_rpt/` for optional benchmark protocol and prediction evidence
 - `<run-dir>/search.db` for resumable Optuna storage
 - `predictions.csv`, `review_queue.csv`, or another requested operational
   scoring output with passthrough identifiers, as-of timestamp, model/data
@@ -361,7 +363,8 @@ Use this model-building shape:
     "run_kind": "initial"
   },
   "comparison": {
-    "autogluon": false
+    "autogluon": false,
+    "sap_rpt": false
   },
   "governance": {
     "risk_tier": "standard",
@@ -494,6 +497,12 @@ Keep every metric name, direction, dataset and uncertainty explicit:
   "autogluon": {
     "attempted": false,
     "reason": "user did not opt in"
+  },
+  "sap_rpt": {
+    "attempted": false,
+    "status": "not_attempted",
+    "role": "benchmark_only",
+    "reason": "user did not opt in"
   }
 }
 ```
@@ -516,6 +525,97 @@ declared primary metric.
 Record the uncertainty method, confidence level, resampling unit and effective
 sample size/support. Add repetitions and seed when the method uses them. A bare
 interval is not enough for new v2.1 runs.
+
+## SAP RPT optional comparison
+
+Keep SAP RPT outside `search.candidates`. When the user declines it, use
+`config.json.comparison.sap_rpt: false`; `metrics.json.sap_rpt` may be omitted
+or record `attempted: false` with a concrete reason.
+
+Use `status: "not_attempted"` when no request ran, `"completed"` when valid
+development evidence exists, and `"failed"` when a request ran but produced no
+valid comparison. A failed attempt records a reason and request failure count
+without claiming development or final evidence.
+
+After opt-in, record:
+
+```json
+{
+  "comparison": {
+    "sap_rpt": {
+      "opted_in": true,
+      "role": "benchmark_only",
+      "installation": {
+        "repository": "https://github.tools.sap/DL-COE/rpt-cli",
+        "user_managed": true,
+        "configured_by_user": true
+      },
+      "external_data_transfer": {
+        "confirmed": true,
+        "destination": "SAP RPT internal playground",
+        "scope": "fold-training context features and labels plus query features"
+      }
+    }
+  }
+}
+```
+
+The private clone, installation, and interactive configuration remain
+user-managed. If the user opted in but setup or endpoint use did not complete,
+set `configured_by_user` or `confirmed` false and record an unattempted result
+with the reason. Never store credentials.
+
+For an attempted benchmark, add:
+
+```json
+{
+  "sap_rpt": {
+    "attempted": true,
+    "status": "completed",
+    "reason": null,
+    "role": "benchmark_only",
+    "client_version": "0.2.1",
+    "client_source_revision": "git:119d55b...",
+    "auth_mode": "playground",
+    "endpoint": "SAP RPT internal playground",
+    "model_id": "sap-rpt-1.5-standard",
+    "deployment_id": "actual-playground-deployment",
+    "context": {
+      "strategy": "stratified_fold_context",
+      "seed": 42,
+      "rows": 2048,
+      "training_only": true,
+      "fingerprint": "sha256:..."
+    },
+    "split_fingerprint": "sha256:...",
+    "development": {
+      "metric": "average_precision",
+      "score": 0.49,
+      "fold_scores": [0.47, 0.51]
+    },
+    "final": null,
+    "request_count": 8,
+    "failed_request_count": 0,
+    "completed_at": "2026-07-28T10:00:00Z",
+    "reproducibility_status": "limited_remote_service",
+    "selection_influenced": false
+  }
+}
+```
+
+Bind `split_fingerprint` to `run_manifest.json.split_fingerprint`. The
+development metric must match the primary selection metric. If `final` is
+present, require its metric, evaluation set, and population fingerprint to
+match the main final-evaluation contract. When it influences a later choice,
+set `selection_influenced: true` and mark the run's evaluation exposure
+`benchmark_selection`.
+
+Keep evidence under `<run-dir>/sap_rpt/`: the project-local benchmark script,
+protocol, context manifest and row-ID hash, request/response manifests, raw
+response hashes, predictions, timings, and failure log. Do not place RPT in
+`search.best_family` or the deployable `selection.model`. State
+`benchmark_only`, `limited_remote_service`, and the internal non-production
+limitation in `results.md`.
 
 For `evaluation.design: "nested_cv"`, use
 `final.eval_set: "outer_cv"`, set `selection_nested: true` and

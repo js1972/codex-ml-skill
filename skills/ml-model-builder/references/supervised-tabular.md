@@ -164,7 +164,9 @@ and state combinations in `governance.md`, including a non-empty
 `consideration_basis` derived only from task/data/deployment fit. Give
 exclusions environment-independent reasons and quantify every budget deferral.
 Record installation/runtime failures and roster coverage gaps. Keep AutoGluon
-outside this roster unless the user opts in.
+and SAP RPT outside this roster unless the user opts in. Treat RPT as a
+separate remote benchmark and follow `sap-rpt.md`; never let its private CLI
+availability change classical candidate eligibility or coverage.
 
 ## Small, wide, and large data
 

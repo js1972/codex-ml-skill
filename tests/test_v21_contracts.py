@@ -783,6 +783,71 @@ with open(args.output, "w", newline="", encoding="utf-8") as handle:
     return artifacts
 
 
+def add_valid_sap_rpt_comparison(artifacts: Path) -> None:
+    config = json.loads((artifacts / "config.json").read_text())
+    config["comparison"] = {
+        "sap_rpt": {
+            "opted_in": True,
+            "role": "benchmark_only",
+            "installation": {
+                "repository": "https://github.tools.sap/DL-COE/rpt-cli",
+                "user_managed": True,
+                "configured_by_user": True,
+            },
+            "external_data_transfer": {
+                "confirmed": True,
+                "destination": "SAP RPT internal playground",
+                "scope": (
+                    "fold-training context features and labels plus query features"
+                ),
+            },
+        }
+    }
+    write_json(artifacts / "config.json", config)
+
+    run_manifest = json.loads((artifacts / "run_manifest.json").read_text())
+    metrics = json.loads((artifacts / "metrics.json").read_text())
+    metrics["sap_rpt"] = {
+        "attempted": True,
+        "status": "completed",
+        "reason": None,
+        "role": "benchmark_only",
+        "client_version": "0.2.1",
+        "client_source_revision": "git:" + "1" * 40,
+        "auth_mode": "playground",
+        "endpoint": "SAP RPT internal playground",
+        "model_id": "sap-rpt-1.5-standard",
+        "deployment_id": "playground-deployment-1",
+        "context": {
+            "strategy": "stratified_fold_context",
+            "seed": 42,
+            "rows": 64,
+            "training_only": True,
+            "fingerprint": "sha256:" + "2" * 64,
+        },
+        "split_fingerprint": run_manifest["split_fingerprint"],
+        "development": {
+            "metric": "average_precision",
+            "score": 0.49,
+            "fold_scores": [0.47, 0.51],
+        },
+        "final": None,
+        "request_count": 4,
+        "failed_request_count": 0,
+        "completed_at": "2026-07-28T10:00:00Z",
+        "reproducibility_status": "limited_remote_service",
+        "selection_influenced": False,
+    }
+    write_json(artifacts / "metrics.json", metrics)
+    (artifacts / "results.md").write_text(
+        "# Results\n\n"
+        "Prediction moment: application time.\n\n"
+        "SAP RPT role: benchmark_only.\n\n"
+        "Reproducibility status: limited_remote_service.\n",
+        encoding="utf-8",
+    )
+
+
 class Version21ContractTests(unittest.TestCase):
     def test_complete_v21_model_and_real_inference_cases_pass(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -790,6 +855,175 @@ class Version21ContractTests(unittest.TestCase):
             build_v21_project(project)
             completed = validate(project, "--run-inference-test")
             self.assertEqual(completed.returncode, 0, completed.stdout)
+
+    def test_valid_sap_rpt_comparison_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            completed = validate(project)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+
+    def test_sap_rpt_setup_and_transfer_must_be_user_confirmed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            config = json.loads((artifacts / "config.json").read_text())
+            config["comparison"]["sap_rpt"]["installation"]["configured_by_user"] = (
+                False
+            )
+            config["comparison"]["sap_rpt"]["external_data_transfer"]["confirmed"] = (
+                False
+            )
+            write_json(artifacts / "config.json", config)
+            completed = validate(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("user-completed configuration", completed.stdout)
+            self.assertIn("confirmed remote transfer", completed.stdout)
+
+    def test_sap_rpt_context_and_split_must_be_fold_safe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            metrics = json.loads((artifacts / "metrics.json").read_text())
+            metrics["sap_rpt"]["context"]["training_only"] = False
+            metrics["sap_rpt"]["split_fingerprint"] = "sha256:" + "3" * 64
+            write_json(artifacts / "metrics.json", metrics)
+            completed = validate(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("training_only", completed.stdout)
+            self.assertIn("split_fingerprint", completed.stdout)
+
+    def test_sap_rpt_metric_must_match_primary_metric(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            metrics = json.loads((artifacts / "metrics.json").read_text())
+            metrics["sap_rpt"]["development"]["metric"] = "accuracy"
+            write_json(artifacts / "metrics.json", metrics)
+            completed = validate(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("development metric", completed.stdout)
+
+    def test_sap_rpt_cannot_be_the_deployable_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            metrics = json.loads((artifacts / "metrics.json").read_text())
+            metrics["selection"] = {"model": "SAP RPT 1.5"}
+            write_json(artifacts / "metrics.json", metrics)
+            completed = validate(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("deployable selection.model", completed.stdout)
+
+    def test_sap_rpt_selection_influence_requires_benchmark_exposure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            metrics = json.loads((artifacts / "metrics.json").read_text())
+            metrics["sap_rpt"]["selection_influenced"] = True
+            write_json(artifacts / "metrics.json", metrics)
+            completed = validate(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("benchmark_selection exposure", completed.stdout)
+
+    def test_sap_rpt_final_selection_with_matching_exposure_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            manifest = json.loads((artifacts / "run_manifest.json").read_text())
+            exposure = manifest["evaluation_exposure"]
+            exposure["status"] = "benchmark_selection"
+            exposure["decisions_influenced"] = ["compared RPT with the local winner"]
+            write_json(artifacts / "run_manifest.json", manifest)
+            metrics = json.loads((artifacts / "metrics.json").read_text())
+            metrics["sap_rpt"]["final"] = {
+                "metric": "average_precision",
+                "score": 0.48,
+                "eval_set": "holdout_test",
+                "population_fingerprint": exposure["population_fingerprint"],
+            }
+            metrics["sap_rpt"]["selection_influenced"] = True
+            write_json(artifacts / "metrics.json", metrics)
+            completed = validate(project)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+
+    def test_unattempted_sap_rpt_opt_in_with_reason_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            config = json.loads((artifacts / "config.json").read_text())
+            config["comparison"]["sap_rpt"]["installation"]["configured_by_user"] = (
+                False
+            )
+            config["comparison"]["sap_rpt"]["external_data_transfer"]["confirmed"] = (
+                False
+            )
+            write_json(artifacts / "config.json", config)
+            metrics = json.loads((artifacts / "metrics.json").read_text())
+            metrics["sap_rpt"].update(
+                {
+                    "attempted": False,
+                    "status": "not_attempted",
+                    "reason": "user setup was not completed",
+                    "development": None,
+                    "final": None,
+                }
+            )
+            write_json(artifacts / "metrics.json", metrics)
+            completed = validate(project)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+
+    def test_failed_sap_rpt_request_with_evidence_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            metrics = json.loads((artifacts / "metrics.json").read_text())
+            metrics["sap_rpt"].update(
+                {
+                    "status": "failed",
+                    "reason": "playground request returned a service error",
+                    "development": None,
+                    "failed_request_count": 1,
+                }
+            )
+            write_json(artifacts / "metrics.json", metrics)
+            completed = validate(project)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+
+    def test_sap_rpt_rejects_incompatible_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            artifacts = build_v21_project(project)
+            add_valid_sap_rpt_comparison(artifacts)
+            config = json.loads((artifacts / "config.json").read_text())
+            config["problem"]["task"] = "time-series"
+            config["forecast"] = {
+                "origin": "2026-07-28",
+                "horizon": 7,
+                "strategy": "direct",
+            }
+            write_json(artifacts / "config.json", config)
+            profile = json.loads((artifacts / "data_profile.json").read_text())
+            profile["task"] = "time-series"
+            write_json(artifacts / "data_profile.json", profile)
+            metrics = json.loads((artifacts / "metrics.json").read_text())
+            metrics["task"] = "time-series"
+            write_json(artifacts / "metrics.json", metrics)
+            completed = validate(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "SAP RPT supports classification or regression only",
+                completed.stdout,
+            )
 
     def test_no_op_inference_cannot_pass(self):
         with tempfile.TemporaryDirectory() as directory:

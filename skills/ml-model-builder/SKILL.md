@@ -1,6 +1,6 @@
 ---
 name: ml-model-builder
-description: Analyze and explain local, URL, or remote warehouse/lake datasets and build production-minded classical machine learning models in Codex or Claude Code. Use when users ask to explore, profile, understand, visualize, train, evaluate, compare, or improve tabular classification, regression, time-series forecasting, or anomaly-detection solutions. Covers memory- and leakage-aware data analysis, task-appropriate validation, high-stakes safeguards, Optuna optimization, optional AutoGluon benchmarking, explainability, and deployable train/infer artifacts.
+description: Analyze and explain local, URL, or remote warehouse/lake datasets and build production-minded classical machine learning models in Codex or Claude Code. Use when users ask to explore, profile, understand, visualize, train, evaluate, compare, or improve tabular classification, regression, time-series forecasting, or anomaly-detection solutions. Covers memory- and leakage-aware data analysis, task-appropriate validation, high-stakes safeguards, Optuna optimization, optional AutoGluon and SAP RPT benchmarking, explainability, and deployable train/infer artifacts.
 ---
 
 # ML Model Builder
@@ -72,6 +72,7 @@ Read only the references needed for the selected route:
 | Metrics, uncertainty, explainability, deployment | `references/evaluation-and-production.md` |
 | Healthcare, finance, employment, insurance, or other high-stakes use | `references/high-stakes.md` |
 | Optional AutoGluon comparison | `references/automl.md` |
+| Optional SAP RPT comparison | `references/sap-rpt.md` |
 | Output files and versioned schemas | `references/artifacts.md` |
 | Example requests and clarification patterns | `references/examples.md` |
 
@@ -79,6 +80,8 @@ Always read `governance.md`, `data-analysis.md`, `data-and-leakage.md`, and
 `artifacts.md`. In model-building or improvement mode, also read the selected
 task reference, `optimization-and-ensembling.md`, and
 `evaluation-and-production.md`. Read `automl.md` only after an explicit opt-in.
+Read `sap-rpt.md` only after offering SAP RPT for a compatible supervised
+tabular task and receiving an explicit opt-in.
 For classification/regression with future outcomes or delayed labels, read
 `time-series.md` as well for temporal validation and censoring safeguards.
 Read `large-data.md` before loading data that may exceed local memory or disk.
@@ -129,6 +132,15 @@ LightGBM and CatBoost as normal modeling dependencies unless a concrete
 incompatibility or resource constraint applies, then install missing selected
 dependencies into the project environment. Keep heavyweight optional systems
 such as AutoGluon opt-in.
+
+Treat SAP RPT as a separate opt-in remote benchmark for tabular classification
+or regression, not as a normal dependency or candidate-roster member. Do not
+clone its private repository or configure authentication. If the user opts in
+and `sap-rpt` is unavailable or unconfigured, give the repository URL, ask the
+user to perform the clone, installation, and interactive playground
+configuration, and pause the RPT branch until they confirm completion. Never
+request credentials or tokens. Continue the ordinary local workflow while RPT
+is declined or unavailable.
 
 Before loading data, estimate memory, disk, scan, and compute requirements.
 Use the DuckDB profiler for data larger than safe in-memory limits. If data
@@ -244,6 +256,12 @@ Treat stacking as optional. Attempt it only when diverse, competitive
 candidates and sufficient out-of-fold data exist. Select it only on validation
 evidence; never require diversity models that are unsuitable for the data.
 
+For classification or regression, offer AutoGluon and SAP RPT once as optional
+comparisons regardless of whether EDA ran earlier. Run either only after
+explicit opt-in and follow its dedicated reference. Keep SAP RPT outside
+`search.candidates`; compare it on the same permitted splits and metric, and
+do not present the internal playground CLI as a deployable production model.
+
 ### 8. Select, calibrate, and evaluate
 
 Finalize the model, threshold, calibration, or anomaly-review budget using only
@@ -321,7 +339,8 @@ completion.
 - [ ] Inference schema and round-trip behavior were tested.
 - [ ] Improvement lineage and evaluation-exposure history are preserved.
 - [ ] Required artifacts pass `scripts/validate_run.py`.
-- [ ] Optional AutoGluon or explainability ran only when requested.
+- [ ] Optional AutoGluon, SAP RPT, or explainability ran only when requested;
+      any RPT installation/configuration remained user-managed.
 - [ ] `results.md` and `data_summary.md` agree with machine-readable artifacts.
 
 If a checklist item cannot apply, record the reason rather than omitting it

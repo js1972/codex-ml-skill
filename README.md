@@ -25,7 +25,7 @@ training/inference artifacts.
 | High-stakes safeguards | Requires domain ownership, oversight, harm-specific evidence, approval status, and prospective/external validation before deployment claims |
 | Production handoff | Saves versioned data/schema/feature/split/run contracts, train/infer scripts, a fitted pipeline, pinned dependencies, model card, metrics, and reports |
 | Executable verification | Runs declared inference cases and verifies real prediction rows, columns, order, finite values, and checksums or golden tolerances |
-| Optional comparisons | Runs AutoGluon or explainability only when requested and compares operational cost as well as predictive quality |
+| Optional comparisons | Offers AutoGluon and SAP RPT only when appropriate and requested, then compares operational cost as well as predictive quality |
 
 ## Operating modes
 
@@ -77,7 +77,32 @@ defined in the
 [governance reference](skills/ml-model-builder/references/governance.md#budget-and-dependency-control);
 exclusions are environment-independent and budget deferrals quantify the
 approved budget and shortfall. AutoGluon remains an explicit heavyweight
-opt-in.
+opt-in. SAP RPT remains a separate opt-in remote benchmark and never replaces
+the required classical roster.
+
+## Optional SAP RPT benchmark
+
+For supervised classification or regression, the skill offers an optional SAP
+RPT comparison whether or not it performed the earlier EDA. The internal
+playground route avoids requiring the user to provision a BTP subaccount, SAP
+AI Core, and RPT deployments.
+
+The RPT repository is private, so Codex and Claude Code do not assume they can
+clone or configure it. When the user opts in, the skill:
+
+1. checks whether `sap-rpt` is already available;
+2. if needed, asks the user to clone
+   `https://github.tools.sap/DL-COE/rpt-cli`, follow its current installation
+   instructions, and complete the interactive playground configuration;
+3. waits for the user's confirmation without requesting credentials;
+4. runs a development-first comparison on the same valid splits and metric as
+   the local models;
+5. records context, deployment, request, latency, and reproducibility evidence.
+
+RPT results are labelled an internal, non-production, `benchmark_only`
+comparison with `limited_remote_service` reproducibility. If RPT wins, the
+report surfaces that result and explains that production use needs a separate
+supported serving design and validation.
 
 ## EDA output
 
@@ -153,6 +178,7 @@ the warehouse/lakehouse/cluster where the data already lives. See
 | `train.py`, `infer.py`, `model.joblib` or `model/` | Reproducible training and trusted local inference |
 | `metrics.json`, `model_card.md`, `results.md` | Evaluation, intended use, limitations, and stakeholder handoff |
 | `requirements.lock`, `inference_test.json` | Pinned environment and tested inference contract |
+| `sap_rpt/` | Optional RPT protocol, context, request/response, prediction, and hash evidence—never credentials |
 
 Never load an untrusted `joblib`/pickle file: deserialization can execute code.
 
@@ -228,6 +254,7 @@ skills/ml-model-builder/
     ├── evaluation-and-production.md
     ├── high-stakes.md
     ├── automl.md
+    ├── sap-rpt.md
     ├── artifacts.md
     └── examples.md
 tests/
