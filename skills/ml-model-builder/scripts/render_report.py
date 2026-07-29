@@ -213,6 +213,60 @@ def approval_scope_cards(approval: dict[str, Any]) -> str:
     )
 
 
+def approval_audit_sections(approval: dict[str, Any]) -> str:
+    amendments = approval.get("amendments") or []
+    amendment_rows: list[str] = []
+    for amendment in amendments:
+        if not isinstance(amendment, dict):
+            continue
+        for change in amendment.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            amendment_rows.append(
+                "<tr>"
+                f"<td>{esc(amendment.get('id'))}</td>"
+                f"<td>{esc(amendment.get('approved_at'))}</td>"
+                f"<td>{esc(change.get('path'))}</td>"
+                f"<td>{esc(compact(change.get('before')))}</td>"
+                f"<td>{esc(compact(change.get('after')))}</td>"
+                f"<td>{esc(amendment.get('reason'))}</td>"
+                "</tr>"
+            )
+    transfers = approval.get("remote_transfers") or []
+    transfer_rows = "".join(
+        "<tr>"
+        f"<td>{esc(transfer.get('id'))}</td>"
+        f"<td>{esc(transfer.get('approved_at'))}</td>"
+        f"<td>{esc(transfer.get('backend'))}</td>"
+        f"<td>{esc(transfer.get('destination'))}</td>"
+        f"<td>{esc(compact(transfer.get('data_scope')))}</td>"
+        f"<td>{esc(transfer.get('purpose'))}</td>"
+        "</tr>"
+        for transfer in transfers
+        if isinstance(transfer, dict)
+    )
+    return (
+        "<h3>Approved amendments</h3>"
+        '<div class="table-wrap"><table><thead><tr>'
+        "<th>ID</th><th>Approved at</th><th>Path</th><th>Before</th>"
+        "<th>After</th><th>Reason</th></tr></thead><tbody>"
+        + (
+            "".join(amendment_rows)
+            or '<tr><td colspan="6">No approved plan amendments.</td></tr>'
+        )
+        + "</tbody></table></div>"
+        "<h3>Approved remote transfers</h3>"
+        '<div class="table-wrap"><table><thead><tr>'
+        "<th>ID</th><th>Approved at</th><th>Backend</th><th>Destination</th>"
+        "<th>Data scope</th><th>Purpose</th></tr></thead><tbody>"
+        + (
+            transfer_rows
+            or '<tr><td colspan="6">No approved remote data transfers.</td></tr>'
+        )
+        + "</tbody></table></div>"
+    )
+
+
 def preflight_rows(findings: list[Any]) -> str:
     rows: list[str] = []
     for finding in findings:
@@ -269,6 +323,26 @@ def backend_detail_sections(backends: dict[str, Any]) -> str:
     autogluon = backends.get("autogluon")
     if isinstance(autogluon, dict):
         build = autogluon.get("build") or {}
+        packaging = build.get("packaging") or {}
+        leaderboard_rows = "".join(
+            "<tr>"
+            f"<td>{esc(item.get('model'))}</td>"
+            f"<td>{fmt_number(item.get('score_val'))}</td>"
+            "</tr>"
+            for item in autogluon.get("native_leaderboard") or []
+            if isinstance(item, dict)
+        )
+        failure_rows = "".join(
+            "<tr>"
+            f"<td>{esc(item.get('component'))}</td>"
+            f"<td>{esc(item.get('stage'))}</td>"
+            f"<td>{badge(item.get('status'))}</td>"
+            f"<td>{esc(item.get('reason'))}</td>"
+            f"<td>{esc(item.get('track_impact'))}</td>"
+            "</tr>"
+            for item in autogluon.get("internal_failures") or []
+            if isinstance(item, dict)
+        )
         sections.append(
             '<article class="backend-detail">'
             "<h3>AutoGluon settings and leaderboard</h3>"
@@ -279,11 +353,45 @@ def backend_detail_sections(backends: dict[str, Any]) -> str:
                         ('Preset', build.get('preset')),
                         ('Time limit (seconds)', build.get('time_limit_seconds')),
                         ('Predictor path', build.get('predictor_path')),
+                        (
+                            'Fold fitting strategy',
+                            build.get('fold_fitting_strategy'),
+                        ),
+                        (
+                            'Fold strategy reason',
+                            build.get('fold_fitting_strategy_reason'),
+                        ),
+                        (
+                            'Training diagnostics',
+                            compact(build.get('training_diagnostics')),
+                        ),
                         ('Data handling', compact(autogluon.get('data_handling'))),
                         ('Evidence', compact(autogluon.get('evidence'))),
                     ]
                 )
             }</dl>"
+            "<h4>Deployment clone and runtime</h4>"
+            f"<dl>{
+                definition_rows(
+                    [
+                        ('Packaging', compact(packaging)),
+                        ('Runtime safeguards', compact(autogluon.get('runtime'))),
+                    ]
+                )
+            }</dl>"
+            '<div class="table-wrap"><table><thead><tr>'
+            "<th>Native model</th><th>Validation score</th>"
+            f"</tr></thead><tbody>{
+                leaderboard_rows
+                or '<tr><td colspan="2">No native leaderboard rows recorded.</td></tr>'
+            }</tbody></table></div>"
+            "<h4>AutoGluon internal failure ledger</h4>"
+            '<div class="table-wrap"><table><thead><tr>'
+            "<th>Component</th><th>Stage</th><th>Status</th><th>Reason</th>"
+            f"<th>Track impact</th></tr></thead><tbody>{
+                failure_rows
+                or '<tr><td colspan="5">No internal failures were recorded.</td></tr>'
+            }</tbody></table></div>"
             "</article>"
         )
 
@@ -468,6 +576,7 @@ footer {{ margin-top: 20px; text-align: center; font-size: 12px; }}
   <div class="grid">{approval_scope_cards(approval)}</div>
   <h3>Execution tracks</h3>
   <div class="grid">{approval_cards(approval)}</div>
+  {approval_audit_sections(approval)}
 </section>
 
 <section>

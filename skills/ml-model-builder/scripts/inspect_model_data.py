@@ -448,6 +448,35 @@ def inspect(args: argparse.Namespace) -> dict[str, Any]:
             comparison_columns,
         )
 
+    feature_signature_counts = (
+        frame.groupby(features, dropna=False, sort=False, observed=True).size()
+        if features
+        else pd.Series(dtype="int64")
+    )
+    repeated_feature_signatures = int((feature_signature_counts > 1).sum())
+    rows_in_repeated_feature_signatures = int(
+        feature_signature_counts[feature_signature_counts > 1].sum()
+    )
+    feature_signature_grouping = {
+        "basis_columns": features,
+        "unique_signatures": int(feature_signature_counts.size),
+        "repeated_signatures": repeated_feature_signatures,
+        "rows_in_repeated_signatures": rows_in_repeated_feature_signatures,
+        "fallback_recommended": bool(
+            args.group_column is None and repeated_feature_signatures > 0
+        ),
+    }
+    if feature_signature_grouping["fallback_recommended"]:
+        add_finding(
+            findings,
+            "warning",
+            "exact_feature_signature_grouping_fallback",
+            "No natural group column was supplied and exact eligible feature "
+            "signatures repeat; keep identical feature vectors in one split "
+            "and one uncertainty cluster",
+            features,
+        )
+
     conflicting_label_signatures = 0
     if task == "classification" and features:
         target_counts = (
@@ -752,6 +781,7 @@ def inspect(args: argparse.Namespace) -> dict[str, Any]:
         },
         "split_context": {
             "group": group_summary,
+            "exact_feature_signature_grouping": feature_signature_grouping,
             "time": time_summary,
             "fold_metadata": fold_audits,
             "discovered_group_metadata": discovered_groups,

@@ -190,6 +190,10 @@ class ModelingPreflightTests(unittest.TestCase):
             self.assertTrue(group["target_is_function_of_group"])
             self.assertGreater(group["identical_feature_signatures_across_groups"], 0)
             self.assertGreater(group["conflicting_label_signatures_across_groups"], 0)
+            signature_grouping = payload["split_context"][
+                "exact_feature_signature_grouping"
+            ]
+            self.assertFalse(signature_grouping["fallback_recommended"])
 
             fold_audit = payload["split_context"]["fold_metadata"]
             self.assertEqual(len(fold_audit), 1)
@@ -223,6 +227,35 @@ class ModelingPreflightTests(unittest.TestCase):
                     "group_ids_cross_folds",
                 }.issubset(codes)
             )
+
+    def test_preflight_recommends_exact_feature_signature_grouping_without_ids(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "repeated_wines.csv"
+            rows = [
+                {
+                    "fixed_acidity": 6.0 + signature,
+                    "alcohol": 9.0 + signature / 10,
+                    "quality": signature % 2,
+                }
+                for signature in range(6)
+                for _ in range(2)
+            ]
+            pd.DataFrame(rows).to_csv(dataset, index=False)
+
+            result = self.run_inspection(dataset)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            grouping = payload["split_context"]["exact_feature_signature_grouping"]
+            self.assertTrue(grouping["fallback_recommended"])
+            self.assertEqual(grouping["repeated_signatures"], 6)
+            self.assertEqual(grouping["rows_in_repeated_signatures"], 12)
+            codes = {
+                finding["code"] for finding in payload["modeling_preflight"]["findings"]
+            }
+            self.assertIn("exact_feature_signature_grouping_fallback", codes)
 
 
 def representative_run() -> dict:
@@ -312,13 +345,43 @@ def representative_run() -> dict:
                         "gpu_enabled": False,
                         "max_requests": 20,
                         "max_context_rows": 1000,
-                        "max_query_rows": 200,
-                        "max_rows_per_request": 100,
+                        "max_request_rows": 1200,
+                        "max_query_batch_rows": 100,
+                        "max_columns": 20,
                         "max_retries": 2,
                         "timeout_seconds": 120,
                     },
                 },
             },
+            "amendments": [
+                {
+                    "id": "rpt-capacity",
+                    "approved_at": "2026-07-29T10:03:00+00:00",
+                    "reason": "Confirmed deployed endpoint capacity.",
+                    "changes": [
+                        {
+                            "path": "tracks.sap_rpt.budget.max_context_rows",
+                            "before": 512,
+                            "after": 1000,
+                        }
+                    ],
+                }
+            ],
+            "remote_transfers": [
+                {
+                    "id": "rpt-transfer-1",
+                    "approved_at": "2026-07-29T10:04:00+00:00",
+                    "backend": "sap_rpt",
+                    "destination": "SAP internal managed RPT endpoint",
+                    "purpose": "shared evaluation",
+                    "data_scope": {
+                        "features": ["fixed_acidity", "volatile_acidity"],
+                        "labels": True,
+                        "query_rows": True,
+                        "identifiers": ["row_id"],
+                    },
+                }
+            ],
         },
         "backends": {
             "classical": {
@@ -355,12 +418,58 @@ def representative_run() -> dict:
                     "preset": "medium_quality",
                     "time_limit_seconds": 900,
                     "predictor_path": "backends/autogluon/predictor",
+                    "fold_fitting_strategy": "sequential_local",
+                    "fold_fitting_strategy_reason": (
+                        "parallel_jobs=1 and bounded local execution"
+                    ),
+                    "training_diagnostics": {
+                        "fit_summary_captured": True,
+                        "elapsed_seconds": 612.7,
+                        "stop_reason": "approved bounded build completed",
+                    },
+                    "packaging": {
+                        "method": "clone_for_deployment",
+                        "model": "best",
+                        "diagnostics_captured_before_clone": True,
+                        "prediction_equivalence": {
+                            "validated": True,
+                            "rows": 8,
+                            "absolute_tolerance": 1e-12,
+                        },
+                        "training_predictor_retained": False,
+                        "training_predictor_path": None,
+                        "retention_reason": None,
+                        "deployment_predictor_bytes": 1000000,
+                        "peak_packaging_disk_bytes": 4000000,
+                    },
                 },
                 "data_handling": {
                     "raw_tabular": True,
                     "external_preprocessing": False,
                     "external_optuna": False,
                 },
+                "runtime": {
+                    "cold_start_subprocess": True,
+                    "limits_set_before_imports": True,
+                    "native_thread_limits": {
+                        "OMP_NUM_THREADS": 1,
+                        "MKL_NUM_THREADS": 1,
+                        "OPENBLAS_NUM_THREADS": 1,
+                        "VECLIB_MAXIMUM_THREADS": 1,
+                    },
+                },
+                "native_leaderboard": [
+                    {"model": "WeightedEnsemble_L2", "score_val": 0.67}
+                ],
+                "internal_failures": [
+                    {
+                        "component": "NeuralNetFastAI",
+                        "stage": "fit",
+                        "status": "failed",
+                        "reason": "Optional dependency incompatibility.",
+                        "track_impact": "track completed without this component",
+                    }
+                ],
                 "evaluation": {
                     "split_fingerprint": split_fingerprint,
                     "evaluation_rows_fingerprint": evaluation_rows_fingerprint,
@@ -388,6 +497,7 @@ def representative_run() -> dict:
                     "policy": "train rows only",
                 },
                 "transfer_confirmation": {
+                    "approval_id": "rpt-transfer-1",
                     "schema_validated": True,
                     "labels_validated": True,
                     "query_rows_excluded_from_context": True,
@@ -495,7 +605,12 @@ class ConsolidatedReportTests(unittest.TestCase):
             self.assertIn("classical baselines and leaderboard", lower)
             self.assertIn("autogluon settings", lower)
             self.assertIn("medium_quality", lower)
+            self.assertIn("deployment clone", lower)
+            self.assertIn("internal failure ledger", lower)
+            self.assertIn("neuralnetfastai", lower)
             self.assertIn("sap rpt context, access, and latency", lower)
+            self.assertIn("approved amendments", lower)
+            self.assertIn("approved remote transfers", lower)
             self.assertIn("uncertainty and limitations", lower)
             self.assertIn("intended use, prohibited use, and monitoring", lower)
             self.assertNotIn("<link", lower)

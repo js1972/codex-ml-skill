@@ -47,7 +47,8 @@ Include SAP RPT in the mandatory experiment approval. Present:
 - RPT model and proposed access route;
 - target and eligible features;
 - labelled-context selection and maximum size;
-- maximum query rows and verified rows per request;
+- maximum context rows, context-plus-query rows per request, query rows per
+  call, and transmitted columns;
 - maximum calls/retries, request timeout, CPU count, parallel jobs, GPU flag,
   memory, and latency/cost allowance;
 - data sent to the remote service.
@@ -69,7 +70,9 @@ When the internal CLI is selected:
 
 Before the first request, obtain explicit confirmation that the named features,
 labels, and query rows may be sent to the named endpoint. Pause only this track
-when setup or transfer approval is missing.
+when setup or transfer approval is missing. Record this as a structured
+`approval.remote_transfers` entry and reference its ID from
+`backends.sap_rpt.transfer_confirmation`.
 
 ## When to use
 
@@ -170,14 +173,32 @@ development sample. Record the production-equivalent batch size.
 ## Scale and reproducibility
 
 Discover actual deployed limits rather than assuming an old model-card or CLI
-limit. Calculate planned calls before execution:
+limit. Keep four capacities distinct:
+
+- `max_context_rows`: labelled context rows included in a request;
+- `max_request_rows`: total context plus query rows accepted in one request;
+- `max_query_batch_rows`: query rows accepted in one call;
+- `max_columns`: all transmitted columns, including target and internal row ID.
+
+Require `max_context_rows + max_query_batch_rows <= max_request_rows` for the
+planned maximum request. Do not reuse “rows per request” to mean query rows
+only.
+
+Calculate planned calls before execution:
 
 ```text
-sum(ceil(query_rows_per_fold / verified_batch_limit))
+sum(ceil(query_rows_per_fold / max_query_batch_rows))
 ```
 
 Include retries and the required representative/single-row inference
 validation repeats in the approved request allowance.
+
+Make the retained adapter batch-safe for arbitrary new input sizes. Split query
+rows into sequential chunks no larger than `max_query_batch_rows`; before each
+transfer, enforce `context rows + chunk rows <= max_request_rows` and the
+`max_columns` limit. Preserve stable row IDs and original input order when
+combining responses. Fail before the first request if the complete operation,
+including allowed retries, would exceed `max_requests`.
 
 Record context/query rows and columns, approximate request bytes, call count,
 failures/retries, wall time, median/p95 latency, and throughput.

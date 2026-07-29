@@ -68,8 +68,8 @@ experiment plan for explicit approval:
 - per-track CPU, memory, parallel-job, and GPU controls;
 - classical candidate families, minimum coverage, time, and Optuna trials;
 - AutoGluon choice, preset, time, and disk budget;
-- SAP RPT choice, context/query/batch/request/retry/timeout budget and access
-  route;
+- SAP RPT choice, context rows, context-plus-query request rows, query rows per
+  call, columns, request/retry/timeout budget, and access route;
 - operational constraints used to recommend a winner.
 
 “Train the best model” does not silently mean “run a few classical models and
@@ -92,6 +92,14 @@ The classical approval names the candidate families and minimum coverage. Its
 ledger uses unique candidate names and records why each family was considered,
 then marks it completed, failed, or excluded. The skill does not install or
 force every theoretically available library into every experiment.
+
+After an AutoGluon build, the skill records its native leaderboard and
+internal model failures, creates
+`clone_for_deployment(model="best")`, verifies original/clone prediction
+equivalence, and retains the smaller prediction-only clone. It tests inference
+in a fresh bounded-thread subprocess so a warm training-process prediction
+cannot hide cold-start failures. Single-job builds use
+`fold_fitting_strategy="sequential_local"`.
 
 ### SAP RPT
 
@@ -153,8 +161,8 @@ artefacts/runs/<run-id>/
 ```
 
 - `run.json` consolidates the problem/data contract, modeling preflight,
-  evaluation, approval and budgets, backend evidence, selection, inference,
-  and lineage.
+  evaluation, approval and budgets, structured amendments and remote-transfer
+  permissions, backend evidence, selection, inference, and lineage.
 - `report.html` is self-contained and includes preflight, baselines, all
   approved backend statuses/results, same-fold comparisons, uncertainty,
   errors, intended/prohibited uses, limitations, monitoring, predictive winner,
@@ -166,20 +174,27 @@ artefacts/runs/<run-id>/
   statuses/scores, metric, selection, use constraints, uncertainty, monitoring,
   backend-specific sections, and `infer.py` command.
 - `train.py` is required only when classical or AutoGluon build reproducibility
-  needs it. An RPT-only run must not contain it.
+  needs it. It verifies the external source fingerprint and writes to a new or
+  explicitly empty run; it never overwrites the validated run. An RPT-only run
+  must not contain it.
 - `infer.py` defaults to the approved operational backend and supports every
-  retained backend explicitly.
+  retained backend explicitly. SAP RPT inference chunks arbitrary input into
+  approved query batches while preserving row IDs and input order.
 - `run.json.inference` defines required/optional inputs, dtypes, missing/extra
   policies, target exclusion, identifiers/feature order, output prediction and
   probability columns, finite-value/bounds requirements, and one real dispatch
   command per retained backend.
 - Backend directories contain only model/predictor/context material required
   for rebuilding, inference, or a material audit.
-- `validation.json` records structural checks and real temporary inference
-  round trips. Every retained backend covers representative, single-row,
-  empty-input, and missing-required-column cases; repeated success cases must
-  be deterministic and preserve row IDs. Test fixtures and outputs are removed
-  after validation.
+- The run is self-contained for its report and inference. Raw source data stays
+  external by default, with its location and fingerprint recorded as an
+  explicit rebuild prerequisite.
+- `validation.json` starts pending. The validator runs structural checks and
+  real temporary inference round trips, then atomically records a pass and
+  timestamp only after executable success. Every retained backend covers
+  representative, single-row, empty-input, and missing-required-column cases;
+  repeated success cases must be deterministic and preserve row IDs. Test
+  fixtures and outputs are removed after validation.
 
 Never load an untrusted pickle/joblib file: deserialization can execute code.
 
@@ -198,6 +213,8 @@ The ML skill:
 
 - defines the prediction moment and label-observation process before features;
 - matches splits to time, groups, repeated entities, and source events;
+- groups repeated exact eligible feature signatures when no natural entity ID
+  exists;
 - keeps final evidence outside selection;
 - fits classical preprocessing, target encoding, resampling, calibration, and
   feature selection within valid fold boundaries;

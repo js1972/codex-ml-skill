@@ -11,11 +11,12 @@ import argparse
 import csv
 import json
 import math
+import os
 import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -23,6 +24,12 @@ from typing import Any, ClassVar
 
 BACKEND_NAMES = ("classical", "autogluon", "sap_rpt")
 BACKEND_SET = set(BACKEND_NAMES)
+NATIVE_THREAD_LIMITS = {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+}
 REQUIRED_INFERENCE_CASE_KINDS = {
     "representative",
     "single_row",
@@ -81,6 +88,42 @@ def read_json(path: Path, errors: list[str]) -> Any:
     except (OSError, json.JSONDecodeError) as exc:
         errors.append(f"{path.name}: invalid JSON ({exc})")
         return None
+
+
+def set_validation_status(path: Path, status: str) -> str | None:
+    """Atomically update validation status without touching case definitions."""
+    temporary_path: Path | None = None
+    try:
+        existing_mode = path.stat().st_mode & 0o7777
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            return "validation.json: root value must be an object"
+        document["status"] = status
+        document["validated_at"] = (
+            datetime.now(timezone.utc).isoformat() if status == "passed" else None
+        )
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=".validation-",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            json.dump(document, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary_path = Path(handle.name)
+        os.chmod(temporary_path, existing_mode)
+        os.replace(temporary_path, path)
+        temporary_path = None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return f"validation.json: cannot atomically set status {status!r} ({exc})"
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return None
 
 
 def require(condition: bool, message: str, errors: list[str]) -> bool:
@@ -206,6 +249,10 @@ def resolve_artifact_path(
     return resolved
 
 
+def directory_file_bytes(path: Path) -> int:
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
 class _ReportAssetParser(HTMLParser):
     ASSET_ATTRIBUTES: ClassVar[dict[str, str]] = {
         "script": "src",
@@ -292,6 +339,39 @@ def normalized_handoff_text(path: Path, *, html_document: bool) -> str | None:
     return re.sub(r"[\s_-]+", " ", source.lower()).strip()
 
 
+def _contains_numeric_score(
+    text: str,
+    backend_label: str,
+    expected_score: float,
+) -> bool:
+    """Match a displayed score numerically near its backend label."""
+    number_pattern = re.compile(
+        r"(?<![\w.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?\s*%?",
+        re.IGNORECASE,
+    )
+    for backend_match in re.finditer(re.escape(backend_label), text):
+        window = text[backend_match.start() : backend_match.end() + 240]
+        for number_match in number_pattern.finditer(window):
+            token = number_match.group(0).strip()
+            percent = token.endswith("%")
+            if percent:
+                token = token[:-1].strip()
+            try:
+                value = float(token)
+            except ValueError:
+                continue
+            if percent:
+                value /= 100.0
+            if math.isclose(
+                value,
+                expected_score,
+                rel_tol=1e-4,
+                abs_tol=5e-4,
+            ):
+                return True
+    return False
+
+
 def validate_handoff_content(
     run_document: Any,
     report_path: Path,
@@ -324,16 +404,16 @@ def validate_handoff_content(
         if isinstance(payload, dict) and payload.get("status") == "completed":
             score = nested(payload, "evaluation", "score")
             if is_finite_number(score):
-                score_tokens = {
-                    str(score).lower(),
-                    f"{float(score):.5g}",
-                    f"{float(score) * 100:.5g}%",
-                }
                 for name, text in documents:
-                    if not any(token in text for token in score_tokens):
+                    if not _contains_numeric_score(
+                        text,
+                        backend_label,
+                        float(score),
+                    ):
                         errors.append(
                             f"{name}: must include the {backend_label} "
-                            "primary-metric score"
+                            "primary-metric score as a numeric value within "
+                            "display precision"
                         )
 
     metric = nested(run_document, "evaluation", "primary_metric", "name")
@@ -389,6 +469,33 @@ def validate_handoff_content(
                 and preset.replace("_", " ").lower() not in text
             ):
                 errors.append(f"{name}: must include the AutoGluon preset")
+            concepts = {
+                "deployment packaging": (
+                    "deployment clone",
+                    "clone for deployment",
+                    "clone_for_deployment",
+                ),
+                "internal component failures": (
+                    "internal failure",
+                    "component failure",
+                    "failed component",
+                    "skipped component",
+                ),
+            }
+            for concept, alternatives in concepts.items():
+                if not any(alternative in text for alternative in alternatives):
+                    errors.append(f"{name}: must include AutoGluon {concept}")
+            failures = nested(backends, "autogluon", "internal_failures")
+            if isinstance(failures, list):
+                for failure in failures:
+                    component = (
+                        failure.get("component") if isinstance(failure, dict) else None
+                    )
+                    if is_nonempty_string(component) and component.lower() not in text:
+                        errors.append(
+                            f"{name}: must include AutoGluon internal failure "
+                            f"component {component!r}"
+                        )
         if "sap_rpt" in backends:
             for concept in ("context", "access", "latency"):
                 if concept not in text:
@@ -588,6 +695,40 @@ def _validate_budget(
         errors,
     ):
         return
+    common_fields = {
+        "cpu_count",
+        "parallel_jobs",
+        "memory_gb",
+        "gpu_enabled",
+    }
+    track_fields = {
+        "classical": {
+            "candidate_families",
+            "time_limit_seconds",
+            "optuna_trials",
+            "minimum_family_coverage",
+        },
+        "autogluon": {
+            "preset",
+            "time_limit_seconds",
+            "disk_gb",
+        },
+        "sap_rpt": {
+            "max_requests",
+            "max_context_rows",
+            "max_request_rows",
+            "max_query_batch_rows",
+            "max_columns",
+            "max_retries",
+            "timeout_seconds",
+        },
+    }
+    validate_known_keys(
+        budget,
+        common_fields | track_fields[backend],
+        field,
+        errors,
+    )
     for name in ("cpu_count", "parallel_jobs"):
         require(
             is_positive_integer(budget.get(name)),
@@ -645,8 +786,9 @@ def _validate_budget(
         for name in (
             "max_requests",
             "max_context_rows",
-            "max_query_rows",
-            "max_rows_per_request",
+            "max_request_rows",
+            "max_query_batch_rows",
+            "max_columns",
             "timeout_seconds",
         ):
             require(
@@ -659,20 +801,226 @@ def _validate_budget(
             f"{field}.max_retries must be a non-negative integer",
             errors,
         )
-        if is_positive_integer(budget.get("max_query_rows")) and is_positive_integer(
-            budget.get("max_rows_per_request")
+        if all(
+            is_positive_integer(budget.get(name))
+            for name in (
+                "max_context_rows",
+                "max_request_rows",
+                "max_query_batch_rows",
+            )
         ):
             require(
-                budget["max_rows_per_request"] <= budget["max_query_rows"],
-                f"{field}.max_rows_per_request cannot exceed max_query_rows",
+                budget["max_query_batch_rows"] <= budget["max_request_rows"],
+                f"{field}.max_query_batch_rows cannot exceed max_request_rows",
                 errors,
             )
+            require(
+                budget["max_context_rows"] + budget["max_query_batch_rows"]
+                <= budget["max_request_rows"],
+                f"{field}.max_context_rows plus max_query_batch_rows cannot "
+                "exceed max_request_rows",
+                errors,
+            )
+
+
+def _validate_approval_amendments(
+    amendments: Any,
+    errors: list[str],
+) -> None:
+    field = "run.json: approval.amendments"
+    if not require(isinstance(amendments, list), f"{field} must be a list", errors):
+        return
+    identifiers: list[str] = []
+    for index, amendment in enumerate(amendments):
+        prefix = f"{field}[{index}]"
+        if not require(
+            isinstance(amendment, dict),
+            f"{prefix} must be an object",
+            errors,
+        ):
+            continue
+        validate_known_keys(
+            amendment,
+            {"id", "approved_at", "reason", "changes"},
+            prefix,
+            errors,
+        )
+        identifier = amendment.get("id")
+        require(
+            is_nonempty_string(identifier),
+            f"{prefix}.id must be non-empty",
+            errors,
+        )
+        if is_nonempty_string(identifier):
+            identifiers.append(identifier)
+        parse_timestamp(amendment.get("approved_at"), f"{prefix}.approved_at", errors)
+        require(
+            is_nonempty_string(amendment.get("reason")),
+            f"{prefix}.reason must be non-empty",
+            errors,
+        )
+        changes = amendment.get("changes")
+        if not require(
+            isinstance(changes, list) and bool(changes),
+            f"{prefix}.changes must be a non-empty list",
+            errors,
+        ):
+            continue
+        paths: list[str] = []
+        for change_index, change in enumerate(changes):
+            change_prefix = f"{prefix}.changes[{change_index}]"
+            if not require(
+                isinstance(change, dict),
+                f"{change_prefix} must be an object",
+                errors,
+            ):
+                continue
+            validate_known_keys(
+                change,
+                {"path", "before", "after"},
+                change_prefix,
+                errors,
+            )
+            path = change.get("path")
+            require(
+                is_nonempty_string(path)
+                and path.startswith(
+                    (
+                        "scope.",
+                        "tracks.classical.",
+                        "tracks.autogluon.",
+                        "tracks.sap_rpt.",
+                    )
+                ),
+                f"{change_prefix}.path must identify an approval scope or track field",
+                errors,
+            )
+            if is_nonempty_string(path):
+                paths.append(path)
+            require(
+                "before" in change and "after" in change,
+                f"{change_prefix} must record before and after values",
+                errors,
+            )
+            if "before" in change and "after" in change:
+                require(
+                    change["before"] != change["after"],
+                    f"{change_prefix}.before and after must differ",
+                    errors,
+                )
+        require(
+            len(paths) == len(set(paths)),
+            f"{prefix}.changes paths must be unique",
+            errors,
+        )
+    require(
+        len(identifiers) == len(set(identifiers)),
+        f"{field} ids must be unique",
+        errors,
+    )
+
+
+def _validate_remote_transfers(
+    transfers: Any,
+    selected: set[str],
+    errors: list[str],
+) -> dict[str, dict[str, Any]]:
+    field = "run.json: approval.remote_transfers"
+    if not require(isinstance(transfers, list), f"{field} must be a list", errors):
+        return {}
+    indexed: dict[str, dict[str, Any]] = {}
+    for index, transfer in enumerate(transfers):
+        prefix = f"{field}[{index}]"
+        if not require(
+            isinstance(transfer, dict),
+            f"{prefix} must be an object",
+            errors,
+        ):
+            continue
+        validate_known_keys(
+            transfer,
+            {
+                "id",
+                "approved_at",
+                "backend",
+                "destination",
+                "purpose",
+                "data_scope",
+            },
+            prefix,
+            errors,
+        )
+        identifier = transfer.get("id")
+        require(
+            is_nonempty_string(identifier),
+            f"{prefix}.id must be non-empty",
+            errors,
+        )
+        if is_nonempty_string(identifier):
+            require(
+                identifier not in indexed,
+                f"{field} ids must be unique",
+                errors,
+            )
+            indexed[identifier] = transfer
+        parse_timestamp(transfer.get("approved_at"), f"{prefix}.approved_at", errors)
+        backend = transfer.get("backend")
+        require(
+            backend == "sap_rpt",
+            f"{prefix}.backend must be 'sap_rpt'",
+            errors,
+        )
+        require(
+            backend in selected,
+            f"{prefix}.backend must name an approved track",
+            errors,
+        )
+        for name in ("destination", "purpose"):
+            require(
+                is_nonempty_string(transfer.get(name)),
+                f"{prefix}.{name} must be non-empty",
+                errors,
+            )
+        data_scope = transfer.get("data_scope")
+        if not require(
+            isinstance(data_scope, dict),
+            f"{prefix}.data_scope must be an object",
+            errors,
+        ):
+            continue
+        validate_known_keys(
+            data_scope,
+            {"features", "labels", "query_rows", "identifiers"},
+            f"{prefix}.data_scope",
+            errors,
+        )
+        require(
+            is_string_list(data_scope.get("features"), nonempty=True),
+            f"{prefix}.data_scope.features must be a non-empty unique string list",
+            errors,
+        )
+        require(
+            data_scope.get("labels") is True,
+            f"{prefix}.data_scope.labels must be true for labelled RPT context",
+            errors,
+        )
+        require(
+            data_scope.get("query_rows") is True,
+            f"{prefix}.data_scope.query_rows must be true",
+            errors,
+        )
+        require(
+            is_string_list(data_scope.get("identifiers")),
+            f"{prefix}.data_scope.identifiers must be a unique string list",
+            errors,
+        )
+    return indexed
 
 
 def validate_approval(
     document: dict[str, Any],
     errors: list[str],
-) -> set[str]:
+) -> tuple[set[str], dict[str, dict[str, Any]]]:
     approval = document.get("approval")
     require(
         isinstance(approval, dict),
@@ -680,7 +1028,13 @@ def validate_approval(
         errors,
     )
     if not isinstance(approval, dict):
-        return set()
+        return set(), {}
+    validate_known_keys(
+        approval,
+        {"approved_at", "scope", "tracks", "amendments", "remote_transfers"},
+        "run.json: approval",
+        errors,
+    )
     parse_timestamp(
         approval.get("approved_at"), "run.json: approval.approved_at", errors
     )
@@ -709,7 +1063,7 @@ def validate_approval(
         errors,
     )
     if not isinstance(tracks, dict):
-        return set()
+        return set(), {}
     require(
         set(tracks) == BACKEND_SET,
         "run.json: approval.tracks must contain exactly classical, "
@@ -759,7 +1113,13 @@ def validate_approval(
         "run.json: approval must select at least one modeling track",
         errors,
     )
-    return selected
+    _validate_approval_amendments(approval.get("amendments"), errors)
+    remote_transfers = _validate_remote_transfers(
+        approval.get("remote_transfers"),
+        selected,
+        errors,
+    )
+    return selected, remote_transfers
 
 
 def validate_backend_evaluation(
@@ -1002,6 +1362,57 @@ def validate_autogluon(
                 "match the approved time limit",
                 errors,
             )
+            if approved_budget.get("parallel_jobs") == 1:
+                require(
+                    build.get("fold_fitting_strategy") == "sequential_local",
+                    "run.json: backends.autogluon.build.fold_fitting_strategy "
+                    "must be 'sequential_local' when approved parallel_jobs is 1",
+                    errors,
+                )
+        require(
+            is_nonempty_string(build.get("fold_fitting_strategy")),
+            "run.json: backends.autogluon.build.fold_fitting_strategy must be "
+            "non-empty",
+            errors,
+        )
+        require(
+            is_nonempty_string(build.get("fold_fitting_strategy_reason")),
+            "run.json: backends.autogluon.build.fold_fitting_strategy_reason "
+            "must be non-empty",
+            errors,
+        )
+        training_diagnostics = build.get("training_diagnostics")
+        if require(
+            isinstance(training_diagnostics, dict),
+            "run.json: backends.autogluon.build.training_diagnostics must be "
+            "an object",
+            errors,
+        ):
+            validate_known_keys(
+                training_diagnostics,
+                {"fit_summary_captured", "elapsed_seconds", "stop_reason"},
+                "run.json: backends.autogluon.build.training_diagnostics",
+                errors,
+            )
+            require(
+                training_diagnostics.get("fit_summary_captured") is True,
+                "run.json: backends.autogluon.build.training_diagnostics."
+                "fit_summary_captured must be true",
+                errors,
+            )
+            require(
+                is_finite_number(training_diagnostics.get("elapsed_seconds"))
+                and float(training_diagnostics["elapsed_seconds"]) >= 0,
+                "run.json: backends.autogluon.build.training_diagnostics."
+                "elapsed_seconds must be a non-negative finite number",
+                errors,
+            )
+            require(
+                is_nonempty_string(training_diagnostics.get("stop_reason")),
+                "run.json: backends.autogluon.build.training_diagnostics."
+                "stop_reason must be non-empty",
+                errors,
+            )
         predictor = resolve_artifact_path(
             run_dir,
             build.get("predictor_path"),
@@ -1017,6 +1428,187 @@ def validate_autogluon(
                 errors.append(
                     "run.json: backends.autogluon.build.predictor_path must be "
                     "inside backends/autogluon"
+                )
+            require(
+                build.get("predictor_path") == "backends/autogluon/predictor",
+                "run.json: backends.autogluon.build.predictor_path must point "
+                "to the deployment clone at backends/autogluon/predictor",
+                errors,
+            )
+        packaging = build.get("packaging")
+        if require(
+            isinstance(packaging, dict),
+            "run.json: backends.autogluon.build.packaging must be an object",
+            errors,
+        ):
+            validate_known_keys(
+                packaging,
+                {
+                    "method",
+                    "model",
+                    "diagnostics_captured_before_clone",
+                    "prediction_equivalence",
+                    "training_predictor_retained",
+                    "training_predictor_path",
+                    "retention_reason",
+                    "deployment_predictor_bytes",
+                    "peak_packaging_disk_bytes",
+                },
+                "run.json: backends.autogluon.build.packaging",
+                errors,
+            )
+            require(
+                packaging.get("method") == "clone_for_deployment",
+                "run.json: backends.autogluon.build.packaging.method must be "
+                "'clone_for_deployment'",
+                errors,
+            )
+            require(
+                packaging.get("model") == "best",
+                "run.json: backends.autogluon.build.packaging.model must be 'best'",
+                errors,
+            )
+            require(
+                packaging.get("diagnostics_captured_before_clone") is True,
+                "run.json: backends.autogluon.build.packaging."
+                "diagnostics_captured_before_clone must be true",
+                errors,
+            )
+            equivalence = packaging.get("prediction_equivalence")
+            if require(
+                isinstance(equivalence, dict),
+                "run.json: backends.autogluon.build.packaging."
+                "prediction_equivalence must be an object",
+                errors,
+            ):
+                validate_known_keys(
+                    equivalence,
+                    {"validated", "rows", "absolute_tolerance"},
+                    "run.json: backends.autogluon.build.packaging."
+                    "prediction_equivalence",
+                    errors,
+                )
+                require(
+                    equivalence.get("validated") is True,
+                    "run.json: backends.autogluon.build.packaging."
+                    "prediction_equivalence.validated must be true",
+                    errors,
+                )
+                require(
+                    is_positive_integer(equivalence.get("rows")),
+                    "run.json: backends.autogluon.build.packaging."
+                    "prediction_equivalence.rows must be a positive integer",
+                    errors,
+                )
+                require(
+                    is_finite_number(equivalence.get("absolute_tolerance"))
+                    and float(equivalence["absolute_tolerance"]) >= 0,
+                    "run.json: backends.autogluon.build.packaging."
+                    "prediction_equivalence.absolute_tolerance must be a "
+                    "non-negative finite number",
+                    errors,
+                )
+            deployment_bytes = packaging.get("deployment_predictor_bytes")
+            peak_bytes = packaging.get("peak_packaging_disk_bytes")
+            require(
+                is_positive_integer(deployment_bytes),
+                "run.json: backends.autogluon.build.packaging."
+                "deployment_predictor_bytes must be a positive integer",
+                errors,
+            )
+            if predictor is not None and is_positive_integer(deployment_bytes):
+                require(
+                    directory_file_bytes(predictor) == deployment_bytes,
+                    "run.json: backends.autogluon.build.packaging."
+                    "deployment_predictor_bytes must match the retained "
+                    "deployment clone size",
+                    errors,
+                )
+            require(
+                is_positive_integer(peak_bytes),
+                "run.json: backends.autogluon.build.packaging."
+                "peak_packaging_disk_bytes must be a positive integer",
+                errors,
+            )
+            if is_positive_integer(deployment_bytes) and is_positive_integer(
+                peak_bytes
+            ):
+                require(
+                    peak_bytes >= deployment_bytes,
+                    "run.json: backends.autogluon.build.packaging."
+                    "peak_packaging_disk_bytes cannot be smaller than "
+                    "deployment_predictor_bytes",
+                    errors,
+                )
+            retained_training = packaging.get("training_predictor_retained")
+            require(
+                isinstance(retained_training, bool),
+                "run.json: backends.autogluon.build.packaging."
+                "training_predictor_retained must be boolean",
+                errors,
+            )
+            if retained_training is True:
+                require(
+                    is_nonempty_string(packaging.get("retention_reason")),
+                    "run.json: backends.autogluon.build.packaging."
+                    "retention_reason must explain why the full training "
+                    "predictor is retained",
+                    errors,
+                )
+                training_predictor = resolve_artifact_path(
+                    run_dir,
+                    packaging.get("training_predictor_path"),
+                    "run.json: backends.autogluon.build.packaging."
+                    "training_predictor_path",
+                    errors,
+                    kind="dir",
+                )
+                require(
+                    packaging.get("training_predictor_path")
+                    == "backends/autogluon/training_predictor",
+                    "run.json: backends.autogluon.build.packaging."
+                    "training_predictor_path must be "
+                    "backends/autogluon/training_predictor when retained",
+                    errors,
+                )
+                if training_predictor is not None and predictor is not None:
+                    require(
+                        training_predictor != predictor,
+                        "run.json: AutoGluon training and deployment predictors "
+                        "must use different paths",
+                        errors,
+                    )
+            elif retained_training is False:
+                require(
+                    packaging.get("training_predictor_path") is None,
+                    "run.json: backends.autogluon.build.packaging."
+                    "training_predictor_path must be null when the training "
+                    "predictor is not retained",
+                    errors,
+                )
+                require(
+                    packaging.get("retention_reason") is None,
+                    "run.json: backends.autogluon.build.packaging."
+                    "retention_reason must be null when the training predictor "
+                    "is not retained",
+                    errors,
+                )
+        backend_dir = run_dir / "backends" / "autogluon"
+        if backend_dir.is_dir() and isinstance(packaging, dict):
+            allowed_entries = {"predictor"}
+            if packaging.get("training_predictor_retained") is True:
+                training_path = packaging.get("training_predictor_path")
+                if is_nonempty_string(training_path):
+                    allowed_entries.add(Path(training_path).name)
+            unknown_entries = sorted(
+                child.name
+                for child in backend_dir.iterdir()
+                if child.name not in allowed_entries
+            )
+            if unknown_entries:
+                errors.append(
+                    "backends/autogluon contains unsupported retained training "
+                    "clutter: " + ", ".join(unknown_entries)
                 )
     handling = value.get("data_handling")
     require(
@@ -1041,11 +1633,104 @@ def validate_autogluon(
             "run.json: backends.autogluon.data_handling.external_optuna must be false",
             errors,
         )
+    runtime = value.get("runtime")
+    require(
+        isinstance(runtime, dict),
+        "run.json: backends.autogluon.runtime must be an object",
+        errors,
+    )
+    if isinstance(runtime, dict):
+        validate_known_keys(
+            runtime,
+            {
+                "cold_start_subprocess",
+                "native_thread_limits",
+                "limits_set_before_imports",
+            },
+            "run.json: backends.autogluon.runtime",
+            errors,
+        )
+        require(
+            runtime.get("cold_start_subprocess") is True,
+            "run.json: backends.autogluon.runtime.cold_start_subprocess must be true",
+            errors,
+        )
+        require(
+            runtime.get("limits_set_before_imports") is True,
+            "run.json: backends.autogluon.runtime.limits_set_before_imports must be true",
+            errors,
+        )
+        limits = runtime.get("native_thread_limits")
+        require(
+            isinstance(limits, dict)
+            and set(limits) == set(NATIVE_THREAD_LIMITS)
+            and all(value == 1 for value in limits.values()),
+            "run.json: backends.autogluon.runtime.native_thread_limits must "
+            "set OMP_NUM_THREADS, MKL_NUM_THREADS, OPENBLAS_NUM_THREADS, and "
+            "VECLIB_MAXIMUM_THREADS to 1",
+            errors,
+        )
+    leaderboard = value.get("native_leaderboard")
+    require(
+        isinstance(leaderboard, list) and bool(leaderboard),
+        "run.json: backends.autogluon.native_leaderboard must be a non-empty list",
+        errors,
+    )
+    if isinstance(leaderboard, list):
+        for index, item in enumerate(leaderboard):
+            prefix = f"run.json: backends.autogluon.native_leaderboard[{index}]"
+            if not require(
+                isinstance(item, dict), f"{prefix} must be an object", errors
+            ):
+                continue
+            require(
+                is_nonempty_string(item.get("model")),
+                f"{prefix}.model must be non-empty",
+                errors,
+            )
+            require(
+                is_finite_number(item.get("score_val")),
+                f"{prefix}.score_val must be finite",
+                errors,
+            )
+    failures = value.get("internal_failures")
+    require(
+        isinstance(failures, list),
+        "run.json: backends.autogluon.internal_failures must be a list",
+        errors,
+    )
+    if isinstance(failures, list):
+        for index, failure in enumerate(failures):
+            prefix = f"run.json: backends.autogluon.internal_failures[{index}]"
+            if not require(
+                isinstance(failure, dict),
+                f"{prefix} must be an object",
+                errors,
+            ):
+                continue
+            validate_known_keys(
+                failure,
+                {"component", "stage", "status", "reason", "track_impact"},
+                prefix,
+                errors,
+            )
+            for name in ("component", "stage", "reason", "track_impact"):
+                require(
+                    is_nonempty_string(failure.get(name)),
+                    f"{prefix}.{name} must be non-empty",
+                    errors,
+                )
+            require(
+                failure.get("status") in {"failed", "skipped", "unavailable"},
+                f"{prefix}.status must be failed, skipped, or unavailable",
+                errors,
+            )
 
 
 def validate_sap_rpt(
     value: dict[str, Any],
     run_dir: Path,
+    remote_transfers: dict[str, dict[str, Any]],
     errors: list[str],
 ) -> None:
     reject_sap_rpt_operation_fields(value, errors)
@@ -1141,6 +1826,19 @@ def validate_sap_rpt(
         errors,
     )
     if isinstance(confirmation, dict):
+        approval_id = confirmation.get("approval_id")
+        require(
+            is_nonempty_string(approval_id),
+            "run.json: backends.sap_rpt.transfer_confirmation.approval_id "
+            "must be non-empty",
+            errors,
+        )
+        require(
+            approval_id in remote_transfers,
+            "run.json: backends.sap_rpt.transfer_confirmation.approval_id "
+            "must reference approval.remote_transfers",
+            errors,
+        )
         for field in (
             "schema_validated",
             "labels_validated",
@@ -1169,6 +1867,7 @@ def reject_sap_rpt_operation_fields(
 def validate_backends(
     document: dict[str, Any],
     selected: set[str],
+    remote_transfers: dict[str, dict[str, Any]],
     evaluation: dict[str, Any] | None,
     run_dir: Path,
     errors: list[str],
@@ -1263,7 +1962,7 @@ def validate_backends(
             elif backend == "autogluon":
                 validate_autogluon(value, approved_budget, run_dir, errors)
             else:
-                validate_sap_rpt(value, run_dir, errors)
+                validate_sap_rpt(value, run_dir, remote_transfers, errors)
         elif backend == "sap_rpt":
             reject_sap_rpt_operation_fields(value, errors)
 
@@ -1626,10 +2325,11 @@ def validate_run_document(
     validate_problem_and_data(document, errors)
     validate_preflight(document, errors)
     evaluation = validate_evaluation(document, errors)
-    selected = validate_approval(document, errors)
+    selected, remote_transfers = validate_approval(document, errors)
     scores, retained = validate_backends(
         document,
         selected,
+        remote_transfers,
         evaluation,
         run_dir,
         errors,
@@ -1969,6 +2669,8 @@ def validate_validation_document(
     document: Any,
     retained: set[str],
     inference_contract: Any,
+    *,
+    executing_cases: bool,
     errors: list[str],
 ) -> list[dict[str, Any]]:
     if not require(
@@ -1977,16 +2679,36 @@ def validate_validation_document(
         errors,
     ):
         return []
+    validate_known_keys(
+        document,
+        {"status", "validated_at", "inference_cases"},
+        "validation.json",
+        errors,
+    )
+    status = document.get("status")
     require(
-        document.get("status") == "passed",
-        "validation.json: status must be 'passed'",
+        status in {"pending", "passed"},
+        "validation.json: status must be 'pending' or 'passed'",
         errors,
     )
-    parse_timestamp(
-        document.get("validated_at"),
-        "validation.json: validated_at",
-        errors,
-    )
+    if executing_cases:
+        require(
+            status == "pending",
+            "validation.json: status must be 'pending' before executable tests",
+            errors,
+        )
+    if status == "passed":
+        parse_timestamp(
+            document.get("validated_at"),
+            "validation.json: validated_at",
+            errors,
+        )
+    elif status == "pending":
+        require(
+            document.get("validated_at") is None,
+            "validation.json: validated_at must be null while status is 'pending'",
+            errors,
+        )
     cases = document.get("inference_cases")
     require(
         isinstance(cases, list) and bool(cases),
@@ -2209,9 +2931,12 @@ def run_inference_cases(
                         argument = argument.replace(placeholder, replacement)
                     command.append(argument)
                 try:
+                    process_environment = os.environ.copy()
+                    process_environment.update(NATIVE_THREAD_LIMITS)
                     completed = subprocess.run(
                         command,
                         cwd=run_dir,
+                        env=process_environment,
                         text=True,
                         capture_output=True,
                         check=False,
@@ -2352,7 +3077,8 @@ def validate(
             validation_document,
             retained,
             inference_contract,
-            errors,
+            executing_cases=run_inference_test,
+            errors=errors,
         )
         if validation_document is not None
         else []
@@ -2381,6 +3107,13 @@ def main() -> int:
     if args.inference_timeout_seconds <= 0:
         print("ERROR: --inference-timeout-seconds must be positive")
         return 2
+    validation_path = run_dir / "validation.json"
+    if args.run_inference_test and validation_path.is_file():
+        status_error = set_validation_status(validation_path, "pending")
+        if status_error:
+            print("Validation failed with 1 error(s):")
+            print(f"- {status_error}")
+            return 1
     errors = validate(
         project,
         run_dir,
@@ -2392,6 +3125,12 @@ def main() -> int:
         for error in errors:
             print(f"- {error}")
         return 1
+    if args.run_inference_test:
+        status_error = set_validation_status(validation_path, "passed")
+        if status_error:
+            print("Validation failed with 1 error(s):")
+            print(f"- {status_error}")
+            return 1
     print(f"Validated ML run: {run_dir}")
     if args.run_inference_test:
         print("All declared inference cases passed using temporary inputs/outputs.")

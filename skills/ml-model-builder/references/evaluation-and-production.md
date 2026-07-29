@@ -180,6 +180,13 @@ prediction/probability values, probability bounds, output row count, and input
 identifier order. Do not substitute a schema-only check, mocked predictor, or
 copied expected file.
 
+Run each inference attempt in a fresh subprocess so validation exercises a
+cold import and model load rather than the warm training process. For
+AutoGluon and other native-library backends, set bounded native thread
+environment variables before importing numerical/model libraries. A warm
+prediction is useful for latency measurement but does not satisfy cold-start
+handoff validation.
+
 Also test optional-column omission, the declared extra-column policy, wrong
 dtypes/units/timezones, unseen categories, all-missing permissible fields, and
 that target/post-event columns are not required when applicable. For capacity

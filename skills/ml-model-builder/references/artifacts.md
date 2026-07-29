@@ -161,13 +161,30 @@ three backends:
           "gpu_enabled": false,
           "max_requests": 20,
           "max_context_rows": 512,
-          "max_query_rows": 320,
-          "max_rows_per_request": 40,
+          "max_request_rows": 576,
+          "max_query_batch_rows": 40,
+          "max_columns": 16,
           "max_retries": 2,
           "timeout_seconds": 120
         }
       }
-    }
+    },
+    "amendments": [],
+    "remote_transfers": [
+      {
+        "id": "rpt-transfer-1",
+        "approved_at": "2026-07-29T12:06:00+08:00",
+        "backend": "sap_rpt",
+        "destination": "SAP internal managed RPT endpoint",
+        "purpose": "shared model evaluation and retained inference",
+        "data_scope": {
+          "features": ["fixed_acidity", "alcohol"],
+          "labels": true,
+          "query_rows": true,
+          "identifiers": ["row_id"]
+        }
+      }
+    ]
   },
   "backends": {
     "classical": {
@@ -221,13 +238,52 @@ three backends:
       "build": {
         "preset": "best_quality",
         "time_limit_seconds": 1200,
-        "predictor_path": "backends/autogluon/predictor"
+        "predictor_path": "backends/autogluon/predictor",
+        "fold_fitting_strategy": "sequential_local",
+        "fold_fitting_strategy_reason": "parallel_jobs=1 and bounded local execution",
+        "training_diagnostics": {
+          "fit_summary_captured": true,
+          "elapsed_seconds": 1184.6,
+          "stop_reason": "approved bounded build completed"
+        },
+        "packaging": {
+          "method": "clone_for_deployment",
+          "model": "best",
+          "diagnostics_captured_before_clone": true,
+          "prediction_equivalence": {
+            "validated": true,
+            "rows": 16,
+            "absolute_tolerance": 1e-12
+          },
+          "training_predictor_retained": false,
+          "training_predictor_path": null,
+          "retention_reason": null,
+          "deployment_predictor_bytes": 155712325,
+          "peak_packaging_disk_bytes": 1650236416
+        }
       },
       "data_handling": {
         "raw_tabular": true,
         "external_preprocessing": false,
         "external_optuna": false
-      }
+      },
+      "runtime": {
+        "cold_start_subprocess": true,
+        "limits_set_before_imports": true,
+        "native_thread_limits": {
+          "OMP_NUM_THREADS": 1,
+          "MKL_NUM_THREADS": 1,
+          "OPENBLAS_NUM_THREADS": 1,
+          "VECLIB_MAXIMUM_THREADS": 1
+        }
+      },
+      "native_leaderboard": [
+        {
+          "model": "WeightedEnsemble_L2",
+          "score_val": 0.79
+        }
+      ],
+      "internal_failures": []
     },
     "sap_rpt": {
       "status": "completed",
@@ -258,6 +314,7 @@ three backends:
         "policy": "frozen labelled context reconstructed for inference"
       },
       "transfer_confirmation": {
+        "approval_id": "rpt-transfer-1",
         "schema_validated": true,
         "labels_validated": true,
         "query_rows_excluded_from_context": true
@@ -325,14 +382,22 @@ For an approved track, use `selected: true`, `status: "approved"`, and a
 non-empty track-appropriate budget. For a declined track, use `selected:
 false`, `status: "declined"`, and `budget: null`.
 
+`approval.amendments` and `approval.remote_transfers` must always be lists.
+Record each later plan change as a unique amendment with `approved_at`,
+`reason`, and non-empty `path`/`before`/`after` changes. Record each permitted
+RPT transfer with a unique ID, approval time, backend, destination, purpose,
+and structured feature/label/query/identifier scope. Reference the transfer ID
+from `backends.sap_rpt.transfer_confirmation.approval_id`.
+
 Every approved budget records positive `cpu_count`, `parallel_jobs`, and
 `memory_gb`, plus boolean `gpu_enabled`. Additionally require:
 
 - classical: a non-empty unique `candidate_families` list,
   `time_limit_seconds`, `optuna_trials`, and `minimum_family_coverage`;
 - AutoGluon: `preset`, `time_limit_seconds`, and `disk_gb`;
-- SAP RPT: `max_requests`, `max_context_rows`, `max_query_rows`,
-  `max_rows_per_request`, `max_retries`, and `timeout_seconds`.
+- SAP RPT: `max_requests`, `max_context_rows`, `max_request_rows`,
+  `max_query_batch_rows`, `max_columns`, `max_retries`, and
+  `timeout_seconds`.
 
 Make the classical ledger's family set equal
 `approval.tracks.classical.budget.candidate_families`. Make classical
@@ -367,13 +432,22 @@ with a reason when Optuna is unnecessary.
 
 ### AutoGluon
 
-Keep the native predictor directory:
+Keep the validated prediction-only deployment clone:
 
 ```text
 backends/autogluon/predictor/
 ```
 
-Record its preset, time limit, predictor path, result, and evidence. Require:
+Before cloning, capture metrics, native leaderboard, internal failures, and
+training diagnostics. Create the clone with
+`clone_for_deployment(model="best")`, compare original and clone predictions,
+and run cold-start root inference in a fresh subprocess. Point
+`build.predictor_path` at `backends/autogluon/predictor`.
+
+Record its preset, time limit, fold-fitting strategy/reason, result, native
+leaderboard, structured internal-failure list, runtime thread limits,
+prediction-equivalence evidence, final predictor bytes, and peak packaging disk
+bytes. Require:
 
 ```json
 {
@@ -383,7 +457,10 @@ Record its preset, time limit, predictor path, result, and evidence. Require:
 }
 ```
 
-Do not copy a classical transformed matrix, Optuna study, or classical model.
+Remove the full training predictor after clone validation unless continued
+AutoGluon analysis was explicitly requested. If retained, use
+`backends/autogluon/training_predictor` and explain why. Do not copy a
+classical transformed matrix, Optuna study, or classical model.
 
 ### SAP RPT
 
@@ -418,8 +495,17 @@ python train.py --backend all
 ```
 
 Keep classical and AutoGluon mechanics separate. AutoGluon receives raw
-eligible tabular data and owns its build. Do not expose an RPT training option.
-Omit `train.py` entirely from an RPT-only run.
+eligible tabular data and owns its build. Its rebuild path must also capture
+diagnostics, create and verify the deployment clone, and leave
+`backends/autogluon/predictor` inference-ready. Do not expose an RPT training
+option. Omit `train.py` entirely from an RPT-only run.
+
+The run is self-contained for report reading and inference, not necessarily
+for rebuilding from raw data. Do not duplicate the source dataset in the run
+by default. Resolve the rebuild source through `run.json.data.source`, verify
+its recorded fingerprint before building, and fail with an actionable message
+when it is missing or changed. Require a new or explicitly empty output run;
+never overwrite a validated run in place.
 
 ### infer.py
 
@@ -476,10 +562,12 @@ not use JavaScript or external assets. Include:
 - approved and declined tracks with budgets, plus each approved backend's
   completed/failed/unavailable status, score when completed, and reason when it
   did not complete;
+- approved plan amendments and remote-transfer scopes;
 - a baseline and classical candidate leaderboard section whenever classical
   was approved, showing failures/unavailability when no score exists;
-- the AutoGluon preset/time/resource settings and result/status whenever
-  AutoGluon was approved;
+- the AutoGluon preset/time/resource settings, fold strategy, deployment-clone
+  evidence, native leaderboard, internal failures, runtime safeguards, and
+  result/status whenever AutoGluon was approved;
 - SAP RPT context policy/coverage, model/access distinction, request failures,
   latency/throughput, and result/status whenever SAP RPT was approved; label
   unavailable or unmeasured dimensions explicitly;
@@ -494,9 +582,10 @@ Make `results.md` the concise text counterpart. It must include every approved
 backend's status/score, shared metric, predictive winner, operational
 recommendation, unified `infer.py` command, intended/prohibited uses,
 limitations, uncertainty, and monitoring. When applicable, it must also name
-the classical baseline/leaderboard, AutoGluon preset, and SAP RPT
-context/access/latency. Do not create a separate model card; include governance
-in the report, results, and `run.json.problem` as applicable.
+the classical baseline/leaderboard, AutoGluon preset/deployment clone/internal
+failure ledger, and SAP RPT context/access/latency. Include approved
+amendments/transfers. Do not create a separate model card; include governance in
+the report, results, and `run.json.problem` as applicable.
 
 ## Adding a backend to the same experiment
 
@@ -504,7 +593,8 @@ When the user adds AutoGluon or SAP RPT later, keep it in the same run only if
 the source fingerprint, target, feature contract, split fingerprint,
 evaluation-row fingerprint, weights, and metric implementation are unchanged.
 
-Obtain approval, add only its `backends` entry and directory, update
+Obtain approval, append structured `approval.amendments` and any required
+`approval.remote_transfers`, add only the backend entry/directory, and update
 `inference.backends`, selection when justified, `lineage.notes`,
 `validation.json`, `report.html`, and `results.md`. Do not create an extension
 directory or copy any existing artifact.
@@ -519,8 +609,8 @@ Record:
 
 ```json
 {
-  "status": "passed",
-  "validated_at": "2026-07-29T12:30:00+08:00",
+  "status": "pending",
+  "validated_at": null,
   "inference_cases": [
     {
       "name": "sap-rpt-representative-new-rows",
@@ -648,6 +738,12 @@ Record:
 }
 ```
 
+Create this file with `status: "pending"` and `validated_at: null`. Never
+pre-write `passed`. With `--run-inference-test`, the validator resets the file
+to pending, runs structural and executable checks, and atomically writes
+`status: "passed"` plus a timezone-aware `validated_at` only after every check
+succeeds. A failed validation remains pending.
+
 Use inline inputs and `{input}`/`{output}` placeholders so the validator creates
 temporary files. For every retained backend, use unique case names and cover
 the four required `kind` values:
@@ -667,12 +763,14 @@ The executable check must preserve identifier order, emit finite prediction
 values, enforce `[0, 1]` probability bounds, and produce byte-identical outputs
 across repeated representative and single-row calls. Exercise optional-column
 omission and the declared extra-column policy in additional temporary checks
-when applicable. Remove all temporary inputs and outputs after execution.
+when applicable. Execute every repeat as a fresh subprocess and apply bounded
+native thread environment variables before interpreter startup. Remove all
+temporary inputs and outputs after execution.
 
 Run:
 
 ```text
-python scripts/validate_run.py <project-directory> \
+python <ml-model-builder-skill>/scripts/validate_run.py <project-directory> \
   --artifacts-dir artefacts/runs/<run-id> --run-inference-test
 ```
 

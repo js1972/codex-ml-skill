@@ -56,6 +56,13 @@ def run_validator(
 def inference_script(*, fault: str | None = None) -> str:
     fault_literal = repr(fault)
     return f"""\
+import os
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+
 import argparse
 import csv
 import sys
@@ -143,6 +150,7 @@ def track_approval(backend: str, selected: bool) -> dict[str, Any]:
         },
         "autogluon": {
             **shared,
+            "parallel_jobs": 1,
             "preset": "best_quality",
             "time_limit_seconds": 600,
             "disk_gb": 16,
@@ -151,8 +159,9 @@ def track_approval(backend: str, selected: bool) -> dict[str, Any]:
             **shared,
             "max_requests": 20,
             "max_context_rows": 512,
-            "max_query_rows": 320,
-            "max_rows_per_request": 64,
+            "max_request_rows": 640,
+            "max_query_batch_rows": 64,
+            "max_columns": 20,
             "max_retries": 2,
             "timeout_seconds": 120,
         },
@@ -228,12 +237,53 @@ def create_backend(run_dir: Path, backend: str) -> dict[str, Any]:
                 "preset": "best_quality",
                 "time_limit_seconds": 600,
                 "predictor_path": "backends/autogluon/predictor",
+                "fold_fitting_strategy": "sequential_local",
+                "fold_fitting_strategy_reason": (
+                    "parallel_jobs=1; avoid Ray and bound local resources"
+                ),
+                "training_diagnostics": {
+                    "fit_summary_captured": True,
+                    "elapsed_seconds": 582.4,
+                    "stop_reason": "approved bounded build completed",
+                },
+                "packaging": {
+                    "method": "clone_for_deployment",
+                    "model": "best",
+                    "diagnostics_captured_before_clone": True,
+                    "prediction_equivalence": {
+                        "validated": True,
+                        "rows": 2,
+                        "absolute_tolerance": 1e-12,
+                    },
+                    "training_predictor_retained": False,
+                    "training_predictor_path": None,
+                    "retention_reason": None,
+                    "deployment_predictor_bytes": 11,
+                    "peak_packaging_disk_bytes": 29,
+                },
             },
             "data_handling": {
                 "raw_tabular": True,
                 "external_preprocessing": False,
                 "external_optuna": False,
             },
+            "runtime": {
+                "cold_start_subprocess": True,
+                "limits_set_before_imports": True,
+                "native_thread_limits": {
+                    "OMP_NUM_THREADS": 1,
+                    "MKL_NUM_THREADS": 1,
+                    "OPENBLAS_NUM_THREADS": 1,
+                    "VECLIB_MAXIMUM_THREADS": 1,
+                },
+            },
+            "native_leaderboard": [
+                {
+                    "model": "WeightedEnsemble_L2",
+                    "score_val": 0.79,
+                }
+            ],
+            "internal_failures": [],
         }
     write_json(
         backend_dir / "context_manifest.json",
@@ -260,6 +310,7 @@ def create_backend(run_dir: Path, backend: str) -> dict[str, Any]:
             "policy": "frozen labelled context reconstructed for inference",
         },
         "transfer_confirmation": {
+            "approval_id": "rpt-transfer-1",
             "schema_validated": True,
             "labels_validated": True,
             "query_rows_excluded_from_context": True,
@@ -350,7 +401,11 @@ def handoff_body(selected: tuple[str, ...], winner: str) -> str:
             "Classical leaderboard: XGBoost ranked first."
         )
     if "autogluon" in selected:
-        lines.append("AutoGluon preset: best quality.")
+        lines.append(
+            "AutoGluon preset: best quality. Deployment clone: "
+            "clone_for_deployment retained the best model. "
+            "Internal failure ledger: none."
+        )
     if "sap_rpt" in selected:
         lines.append(
             "SAP RPT context: frozen labelled rows. "
@@ -424,6 +479,26 @@ def build_project(
                 "primary_metric": True,
             },
             "tracks": tracks,
+            "amendments": [],
+            "remote_transfers": (
+                [
+                    {
+                        "id": "rpt-transfer-1",
+                        "approved_at": "2026-07-29T08:06:00+08:00",
+                        "backend": "sap_rpt",
+                        "destination": "SAP internal managed RPT endpoint",
+                        "purpose": "model evaluation and retained inference",
+                        "data_scope": {
+                            "features": ["fixed_acidity", "alcohol"],
+                            "labels": True,
+                            "query_rows": True,
+                            "identifiers": ["row_id"],
+                        },
+                    }
+                ]
+                if "sap_rpt" in selected
+                else []
+            ),
         },
         "backends": backends,
         "selection": {
@@ -513,8 +588,8 @@ def build_project(
     write_json(
         run_dir / "validation.json",
         {
-            "status": "passed",
-            "validated_at": "2026-07-29T08:30:00+08:00",
+            "status": "pending",
+            "validated_at": None,
             "inference_cases": [
                 inference_case(backend, kind)
                 for backend in selected
@@ -676,7 +751,11 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
             ),
             ("autogluon", "preset", "preset must be a non-empty string"),
             ("autogluon", "disk_gb", "disk_gb must be a positive finite number"),
-            ("sap_rpt", "max_query_rows", "max_query_rows must be a positive integer"),
+            (
+                "sap_rpt",
+                "max_query_batch_rows",
+                "max_query_batch_rows must be a positive integer",
+            ),
             (
                 "sap_rpt",
                 "timeout_seconds",
@@ -710,6 +789,141 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("external_optuna must be false", completed.stdout)
             self.assertIn("must not declare classical preprocessing", completed.stdout)
+
+    def test_autogluon_requires_a_validated_minimal_deployment_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("autogluon",))
+            document = read_json(run_dir / "run.json")
+            packaging = document["backends"]["autogluon"]["build"]["packaging"]
+            packaging["method"] = "save_space"
+            packaging["prediction_equivalence"]["validated"] = False
+            packaging["peak_packaging_disk_bytes"] = 1
+            (run_dir / "backends/autogluon/training_predictor").mkdir()
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "packaging.method must be 'clone_for_deployment'",
+                completed.stdout,
+            )
+            self.assertIn(
+                "prediction_equivalence.validated must be true",
+                completed.stdout,
+            )
+            self.assertIn(
+                "peak_packaging_disk_bytes cannot be smaller",
+                completed.stdout,
+            )
+            self.assertIn("unsupported retained training clutter", completed.stdout)
+
+    def test_single_job_autogluon_requires_sequential_cold_start_safeguards(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("autogluon",))
+            document = read_json(run_dir / "run.json")
+            backend = document["backends"]["autogluon"]
+            backend["build"]["fold_fitting_strategy"] = "parallel_local"
+            backend["build"]["training_diagnostics"]["fit_summary_captured"] = False
+            backend["runtime"]["native_thread_limits"]["OMP_NUM_THREADS"] = 2
+            backend["runtime"]["limits_set_before_imports"] = False
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "fold_fitting_strategy must be 'sequential_local'",
+                completed.stdout,
+            )
+            self.assertIn(
+                "training_diagnostics.fit_summary_captured must be true",
+                completed.stdout,
+            )
+            self.assertIn("native_thread_limits must set", completed.stdout)
+            self.assertIn("limits_set_before_imports must be true", completed.stdout)
+
+    def test_autogluon_internal_failure_ledger_is_structured(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("autogluon",))
+            document = read_json(run_dir / "run.json")
+            document["backends"]["autogluon"]["internal_failures"] = [
+                {
+                    "component": "NeuralNetFastAI",
+                    "stage": "fit",
+                    "status": "failed",
+                    "reason": "",
+                    "track_impact": "track completed without this component",
+                }
+            ]
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "internal_failures[0].reason must be non-empty", completed.stdout
+            )
+
+    def test_approval_amendments_are_structured_and_auditable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("sap_rpt",))
+            document = read_json(run_dir / "run.json")
+            document["approval"]["amendments"] = [
+                {
+                    "id": "rpt-capacity-amendment",
+                    "approved_at": "2026-07-29T08:07:00+08:00",
+                    "reason": "The deployed route disclosed a larger context limit.",
+                    "changes": [
+                        {
+                            "path": "tracks.sap_rpt.budget.max_context_rows",
+                            "before": 256,
+                            "after": 512,
+                        }
+                    ],
+                }
+            ]
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+
+            document["approval"]["amendments"][0]["changes"][0]["after"] = 256
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("before and after must differ", completed.stdout)
+
+    def test_rpt_requires_a_structured_remote_transfer_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("sap_rpt",))
+            document = read_json(run_dir / "run.json")
+            document["approval"]["remote_transfers"] = []
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "approval_id must reference approval.remote_transfers",
+                completed.stdout,
+            )
+
+    def test_rpt_capacity_fields_are_unambiguous_and_consistent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("sap_rpt",))
+            document = read_json(run_dir / "run.json")
+            budget = document["approval"]["tracks"]["sap_rpt"]["budget"]
+            budget["max_request_rows"] = 550
+            budget["max_rows_per_request"] = 64
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("unsupported fields: max_rows_per_request", completed.stdout)
+            self.assertIn(
+                "max_context_rows plus max_query_batch_rows cannot exceed "
+                "max_request_rows",
+                completed.stdout,
+            )
 
     def test_rpt_rejects_training_and_search_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -809,6 +1023,61 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
 
 
 class MinimalArtifactTests(unittest.TestCase):
+    def test_report_scores_are_parsed_numerically_with_display_tolerance(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("autogluon",))
+            document = read_json(run_dir / "run.json")
+            document["backends"]["autogluon"]["evaluation"]["score"] = (
+                0.6998456938387184
+            )
+            write_json(run_dir / "run.json", document)
+            for filename in ("report.html", "results.md"):
+                path = run_dir / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace("0.79", "0.6998"),
+                    encoding="utf-8",
+                )
+            completed = run_validator(project)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+
+            results_path = run_dir / "results.md"
+            results_path.write_text(
+                results_path.read_text(encoding="utf-8").replace("0.6998", "0.6978"),
+                encoding="utf-8",
+            )
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "primary-metric score as a numeric value within display precision",
+                completed.stdout,
+            )
+
+    def test_handoff_names_each_autogluon_internal_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("autogluon",))
+            document = read_json(run_dir / "run.json")
+            document["backends"]["autogluon"]["internal_failures"] = [
+                {
+                    "component": "NeuralNetFastAI",
+                    "stage": "fit",
+                    "status": "failed",
+                    "reason": "optional dependency incompatibility",
+                    "track_impact": "track completed without this component",
+                }
+            ]
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "must include AutoGluon internal failure component "
+                "'NeuralNetFastAI'",
+                completed.stdout,
+            )
+
     def test_report_and_results_must_include_every_approved_backend(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
@@ -968,6 +1237,9 @@ class InferenceExecutionTests(unittest.TestCase):
             run_dir = build_project(project, selected=("sap_rpt",))
             completed = run_validator(project, "--run-inference-test")
             self.assertEqual(completed.returncode, 0, completed.stdout)
+            validation = read_json(run_dir / "validation.json")
+            self.assertEqual(validation["status"], "passed")
+            self.assertIsInstance(validation["validated_at"], str)
             self.assertFalse((run_dir / "inference_outputs").exists())
             self.assertEqual(
                 sorted(path.name for path in run_dir.iterdir()),
@@ -980,6 +1252,34 @@ class InferenceExecutionTests(unittest.TestCase):
                     "run.json",
                     "validation.json",
                 ],
+            )
+
+    def test_failed_inference_leaves_validation_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(
+                project,
+                selected=("autogluon",),
+                inference_fault="omit_prediction",
+            )
+            completed = run_validator(project, "--run-inference-test")
+            self.assertNotEqual(completed.returncode, 0)
+            validation = read_json(run_dir / "validation.json")
+            self.assertEqual(validation["status"], "pending")
+            self.assertIsNone(validation["validated_at"])
+
+    def test_pending_validation_cannot_claim_a_validation_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project)
+            validation = read_json(run_dir / "validation.json")
+            validation["validated_at"] = "2026-07-29T08:30:00+08:00"
+            write_json(run_dir / "validation.json", validation)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "validated_at must be null while status is 'pending'",
+                completed.stdout,
             )
 
     def test_actual_inference_output_columns_are_validated(self) -> None:

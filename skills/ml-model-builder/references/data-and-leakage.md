@@ -150,6 +150,27 @@ still requires future/external validation for high-stakes deployment.
 Persist split assignments or the deterministic rule. Never allow a target-aware
 decision to inspect held-out targets.
 
+When no natural entity, batch, or source-event identifier exists, use an exact
+feature-signature group as a leakage-control fallback:
+
+1. Canonicalize the eligible prediction-time feature columns with explicit
+   dtype and missing-value representation.
+2. Exclude the target, identifiers, fold metadata, post-outcome fields, and
+   fields unavailable at prediction time.
+3. Hash or otherwise group the exact canonical feature vector.
+4. Assign every repeated signature wholly to one development/evaluation
+   partition and keep it intact in inner folds.
+5. Use the same signature clusters for group/block bootstrap uncertainty when
+   repeated rows would otherwise be resampled as independent observations.
+6. Record the signature columns, canonicalization rule, fingerprint, number of
+   repeated signatures, rows covered, and cross-partition overlap audit.
+
+This fallback prevents exact duplicate feature vectors—such as identical
+laboratory measurements with different row IDs—from leaking across partitions.
+It is not a substitute for a natural entity or source-event group when one
+exists. Conflicting labels within a signature are a label/noise issue to report,
+not a reason to let the rows cross folds.
+
 It is acceptable to verify aggregate event support once while constructing the
 split. Record the check, freeze the rule, and then seal holdout labels; do not
 revisit those counts to choose features, thresholds, or models.

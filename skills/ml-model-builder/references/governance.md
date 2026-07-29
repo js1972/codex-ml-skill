@@ -56,7 +56,13 @@ target/features in `problem`, the evaluation plan in `evaluation`, and set
 `approval.scope.target`, `feature_contract`, `split_design`, and
 `primary_metric` to true only after the user confirms those current values.
 Record each track's selection/status/budget and the approval time in
-`approval`, and any later approved plan change in `lineage.notes`.
+`approval`. Initialize `approval.amendments` and
+`approval.remote_transfers` as lists, even when empty.
+
+For each later approved plan change, add one amendment with a unique ID,
+approval timestamp, reason, and a non-empty list of structured
+`path`/`before`/`after` changes. Use `lineage.notes` only for scientific
+interpretation or evidence exposure, not as the sole approval record.
 
 Do not start one track while the overall plan awaits approval. After approval,
 an unavailable dependency or access route may pause only that approved track
@@ -65,7 +71,9 @@ while other approved tracks continue. Do not substitute an unapproved backend.
 For SAP RPT, obtain a second explicit confirmation before the first remote
 request when selected features, labels, or query rows will leave the local
 environment. Name the destination and data scope. Never request or store
-credentials.
+credentials. Record a unique transfer approval ID, timestamp, backend,
+destination, purpose, and structured feature/label/query/identifier scope in
+`approval.remote_transfers`; reference that ID from the completed RPT backend.
 
 ## Question design
 
@@ -114,10 +122,10 @@ Do not express every backend as Optuna trials:
 - **Classical:** `candidate_families`, `minimum_family_coverage`,
   `time_limit_seconds`, and `optuna_trials`.
 - **AutoGluon:** `preset`, `time_limit_seconds`, and `disk_gb`.
-- **SAP RPT:** `max_context_rows`, `max_query_rows`,
-  `max_rows_per_request`, `max_requests`, `max_retries`, and
-  `timeout_seconds`, plus remote-transfer approval and any latency/cost
-  envelope.
+- **SAP RPT:** `max_context_rows`, `max_request_rows` for context plus query,
+  `max_query_batch_rows` per call, `max_columns`, `max_requests`,
+  `max_retries`, and `timeout_seconds`, plus remote-transfer approval and any
+  latency/cost envelope.
 
 Ask before materially exceeding any approved budget.
 
@@ -159,8 +167,9 @@ When the user adds an optional backend later:
 1. Verify that the experiment contract is still identical.
 2. Obtain explicit approval for the added track and budget.
 3. Add only its required backend artifacts.
-4. Update `approval.tracks`, `backends`, `inference.backends`, selection,
-   `lineage.notes`, and `validation.json`.
+4. Update `approval.tracks`, add a structured `approval.amendments` record and
+   any `approval.remote_transfers` record, then update `backends`,
+   `inference.backends`, selection, `lineage.notes`, and `validation.json`.
 5. Refresh the inclusive `report.html` and `results.md`.
 
 Do not create a full child run or copy the existing model, fold assignments,
@@ -185,6 +194,7 @@ Use the consolidated `run.json` as the machine-readable authority. Record:
 - problem, cohort, label, feature, and evaluation contracts;
 - modeling-preflight findings and approved resolutions;
 - the explicit experiment approval and approved later changes;
+- structured remote-transfer approvals and their backend references;
 - track selections, budgets, dependencies, execution status, failures, and
   results;
 - split fingerprint and overlap/order/support audits;

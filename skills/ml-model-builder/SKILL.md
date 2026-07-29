@@ -160,16 +160,18 @@ starting any backend, present a concise execution plan containing:
 - classical track: include/decline, candidate families, minimum coverage,
   wall-time, and Optuna-trial budget;
 - AutoGluon track: include/decline, preset, wall-time, and disk budget;
-- SAP RPT track: include/decline, model/access route, context/query and remote
-  batch/request/retry/timeout budget;
+- SAP RPT track: include/decline, model/access route, context-row,
+  total-request-row, query-batch-row, column, request/retry/timeout budget;
 - operational constraints used to select a winner.
 
 Require explicit user confirmation. “Train the best model” does not authorize
 silently omitting AutoGluon or SAP RPT; recommend a choice for each track and
 ask the user to approve or change it. Record the four confirmed experiment
 semantics as true booleans under `approval.scope` and the choice/budget for
-all three tracks under `approval.tracks`. Do not execute any track until
-approval is received.
+all three tracks under `approval.tracks`. Initialize structured
+`approval.amendments` and `approval.remote_transfers` lists. Record later
+approved plan changes and remote-data permissions there, not only in narrative
+notes. Do not execute any track until approval is received.
 
 Obtain any additional remote-data-transfer confirmation required by the SAP
 RPT route before its first request.
@@ -186,6 +188,12 @@ Do not force a separate holdout when it would leave too few independent groups
 or rare events for meaningful evaluation. Predeclare nested/repeated outer CV,
 external validation, or prospective validation and state the independence
 limits.
+
+When no natural entity or source-event identifier exists, derive an exact
+feature signature from canonical eligible prediction-time feature values. If
+signatures repeat, keep every identical signature in one split and one
+uncertainty cluster. Exclude the target, identifiers, fold metadata, and
+post-outcome fields from the signature and record its columns and fingerprint.
 
 ### 5. Execute approved tracks
 
@@ -206,6 +214,11 @@ Pass each eligible raw training table, target, approved metric, fold
 boundaries, preset, and time/resource budget to AutoGluon. Let AutoGluon own
 its preprocessing, model construction, tuning, and ensembling. Do not put it
 inside external Optuna or feed it the classical transformed matrix.
+
+When `parallel_jobs=1`, set AutoGluon's fold fitting strategy to
+`sequential_local` and record the reason. Capture the native leaderboard and a
+structured internal-failure ledger; an internal model failure does not make a
+successfully completed AutoGluon track a failure.
 
 #### SAP RPT
 
@@ -251,10 +264,28 @@ Follow `references/artifacts.md`. Create one compact run directory with:
 - only the backend artifacts required to rebuild or infer;
 - `validation.json`.
 
-Omit `train.py` for an RPT-only run. Make `infer.py` select the approved operational recommendation
-by default and support `--backend classical|autogluon|sap-rpt` for every
-retained backend. Give SAP RPT a tested new-row inference path using the frozen
-context policy and access configuration. Its backend directory must not
+The compact run is self-contained for reading the report and running
+inference. Do not copy the raw training dataset into it by default. Rebuilding
+a classical or AutoGluon backend may depend on the original source recorded in
+`run.json.data.source`; `train.py` must verify that source against the recorded
+fingerprint, fail clearly when it is missing or changed, and write to a new or
+explicitly empty output run rather than overwrite the validated run in place.
+
+For a retained AutoGluon backend, capture metrics, leaderboard, failures, and
+training diagnostics before creating `clone_for_deployment(model="best")`.
+Compare original and clone predictions on a temporary fixture, then retain the
+validated deployment clone at `backends/autogluon/predictor`. Remove the full
+training predictor after validation unless continued AutoGluon analysis is
+explicitly required. Record final predictor size and peak packaging disk use.
+
+Omit `train.py` for an RPT-only run. Make `infer.py` select the approved
+operational recommendation by default and support
+`--backend classical|autogluon|sap-rpt` for every retained backend. Give SAP
+RPT a tested new-row inference path using the frozen context policy and access
+configuration. The RPT adapter must accept arbitrary input sizes, split them
+into ordered `max_query_batch_rows` chunks, enforce the request and column
+limits, preserve row IDs and input order, and fail before transfer when the
+approved request budget is insufficient. Its backend directory must not
 contain `train.py`.
 
 Record exact required/optional inputs, dtypes, missing/extra policy, excluded
@@ -263,11 +294,18 @@ and backend commands under `run.json.inference`. For every retained backend,
 declare representative, single-row, empty-input, and missing-required-column
 cases in `validation.json`. Dispatch the real backend, preserve row IDs, and
 repeat representative/single-row cases to verify deterministic output.
+Initialize validation with `status: "pending"` and `validated_at: null`; never
+pre-write a passing status.
+
+Run every inference case in a fresh subprocess. Before importing NumPy,
+pandas, Torch, AutoGluon, or a backend that imports them, set
+`OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, and
+`VECLIB_MAXIMUM_THREADS` to `1` in `infer.py`.
 
 Run the artifact validator and real inference round trips:
 
 ```text
-python scripts/validate_run.py <project-directory> \
+python <ml-model-builder-skill>/scripts/validate_run.py <project-directory> \
   --artifacts-dir <run-directory> --run-inference-test
 ```
 
@@ -280,9 +318,10 @@ behavior before handoff.
 Keep all approved backends for the same data, target, feature contract, splits,
 and metric in one experiment. When the user later adds AutoGluon or SAP RPT to
 that experiment, add only its `backends` entry and directory, update the
-approval, inference, selection, validation, and `lineage.notes` contracts, then
-refresh the inclusive root report and results. Do not copy the parent model,
-folds, predictions, plots, fixtures, or other unchanged files.
+structured approval amendment/transfer records, inference, selection,
+validation, and `lineage.notes` contracts, then refresh the inclusive root
+report and results. Do not copy the parent model, folds, predictions, plots,
+fixtures, or other unchanged files.
 
 Create a separate run only when the data, target, split, metric, modeling
 hypothesis, or released winner changes materially. Do not tune descendants
@@ -297,15 +336,16 @@ against previously opened final evidence while claiming a new unbiased result.
 - [ ] Verify splits, leakage controls, label maturity, support, and fold-local
       classical preprocessing.
 - [ ] Keep AutoGluon autonomous and outside external Optuna/classical
-      preprocessing.
+      preprocessing; package a prediction-equivalent deployment clone and test
+      cold-start inference.
 - [ ] Treat SAP RPT as pretrained; package context/query data without training
       artifacts or training terminology.
 - [ ] Compare approved tracks on shared evaluation boundaries and metric code.
 - [ ] Report baselines, uncertainty, errors, limitations, predictive winner,
       operational recommendation, and exact inference commands.
 - [ ] Test unified inference for every retained backend.
-- [ ] Keep the run minimal, self-contained, and free of EDA or duplicated
-      parent artifacts.
-- [ ] Pass `scripts/validate_run.py`.
+- [ ] Keep the run minimal, inference-ready, and free of EDA or duplicated
+      parent artifacts; record external rebuild prerequisites explicitly.
+- [ ] Pass `<ml-model-builder-skill>/scripts/validate_run.py`.
 
 If an item does not apply, record why rather than omitting it silently.
