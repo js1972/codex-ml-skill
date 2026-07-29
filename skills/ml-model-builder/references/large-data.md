@@ -3,7 +3,7 @@
 ## Contents
 
 - [Preflight](#preflight)
-- [Panel time-series profiling](#panel-time-series-profiling)
+- [Panel time-series preflight](#panel-time-series-preflight)
 - [Choose the execution location](#choose-the-execution-location)
 - [Larger than memory but fits local disk](#larger-than-memory-but-fits-local-disk)
 - [Larger than the local machine](#larger-than-the-local-machine)
@@ -41,15 +41,15 @@ bound to that version. Claim exact reproducibility only when a native
 object-store/warehouse client verifies the requested version or the input is
 content-hashed.
 
-## Panel time-series profiling
+## Panel time-series preflight
 
 Compute full-population series counts, row-count/coverage distributions, date
 ranges and gap summaries where the source engine can aggregate them safely.
-Do not materialize or plot every series. Bound detailed local diagnostics with
-`--max-panel-series` (default 12), select series deterministically, and record
-the selection rule. Pull only aggregated profiles and bounded traces from a
-remote panel. Run rolling-origin and per-horizon validation separately; the
-profiler does not establish forecast validity.
+Do not materialize every series. Pull only the structural aggregates and
+bounded rows required to validate row grain, split feasibility, label maturity,
+and feature availability. Run rolling-origin and per-horizon validation
+separately. This is modeling preflight, not EDA, and must not create an
+exploratory report or figures.
 
 ## Choose the execution location
 
@@ -59,24 +59,24 @@ Use the smallest system that safely performs the work:
 |---|---|
 | Fits comfortably in memory | pandas/in-memory modeling |
 | Exceeds memory but fits local disk | DuckDB/Polars streaming with Parquet and disk spill |
-| Already in a warehouse/lake | Push profiling/features down to BigQuery, Snowflake, Databricks SQL, Spark, Athena, Trino, or the existing engine |
+| Already in a warehouse/lake | Push preflight checks/features down to BigQuery, Snowflake, Databricks SQL, Spark, Athena, Trino, or the existing engine |
 | Exceeds local disk/CPU or would take excessive scans | Cloud VM/managed cluster close to the data |
 | Training algorithm supports out-of-core batches | Incremental/out-of-core estimator over partitioned data |
 
-Avoid downloading a huge warehouse table solely to run local EDA. Move code to
-data, return aggregated profiles and bounded samples, and preserve immutable
-query/snapshot identifiers.
+Avoid downloading a huge warehouse table solely for local preflight. Move code
+to data, return only the aggregates and bounded rows needed for the approved
+experiment, and preserve immutable query/snapshot identifiers.
 
 ## Larger than memory but fits local disk
 
-Use `scripts/profile_dataset.py --engine duckdb`; auto mode routes large local
-files when its footprint estimate exceeds the memory budget. Configure:
+Use DuckDB or another disk-backed engine for the narrow modeling preflight and
+feature preparation. Configure explicit resource limits, for example:
 
 ```text
---duckdb-memory-limit 4GB
---duckdb-temp-directory /fast/disk/duckdb-temp
---threads 4
---expected-source-bytes 50000000000
+memory_limit = 4GB
+temporary_directory = /fast/disk/duckdb-temp
+threads = 4
+expected_source_bytes = 50000000000
 ```
 
 Prefer typed, partitioned Parquet over CSV after a validated one-time
@@ -91,7 +91,7 @@ engine avoids RAM exhaustion but does not make an undersized disk safe.
 
 Choose from:
 
-- **Warehouse SQL:** best for profiles, joins, temporal coverage, feature
+- **Warehouse SQL:** best for structural checks, joins, temporal coverage, feature
   tables and reproducible samples where the data already lives.
 - **Lakehouse/Spark/Dask/Ray:** useful for distributed transformations or
   algorithms that genuinely require multiple workers.
@@ -101,9 +101,9 @@ Choose from:
   deployment are already standardized there.
 
 Do not copy credentials into artifacts. Use the platform's identity mechanism,
-read-only access for analysis, bounded queries, partition pruning and cost
-controls. Record warehouse project/database, table or snapshot version, query
-text/hash, engine version and execution timestamp.
+least-privilege access, bounded queries, partition pruning, and cost controls.
+Record warehouse project/database, table or snapshot version, query text/hash,
+engine version, and execution timestamp.
 
 ## Distributed training
 
@@ -124,11 +124,8 @@ partitions and prevent fold-local preprocessors from aggregating globally.
 
 ## Sampling
 
-Sampling is valid for:
-
-- plotting;
-- model-family/hyperparameter screening;
-- expensive explanation prototypes.
+Sampling is valid for model-family/hyperparameter screening and expensive
+explanation prototypes.
 
 Do not sample headline row counts, join integrity, rare-event support, label
 maturity, or split feasibility without explicit error bounds. Preserve time,

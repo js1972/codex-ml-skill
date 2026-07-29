@@ -27,10 +27,8 @@ likelihood, reversibility and scale; vulnerable groups and proxy attributes;
 feedback loops; misuse paths; and consequences of abstention, delay and model
 error. Keep `governance.risk_tier` as `not_assessed` until this review is
 complete. When uncertain, apply the stronger safeguards and request domain
-review. Pass the current `not_assessed`, `standard` or `high` value to the
-profiler with `--risk-tier`; do not let its default make the decision.
-Use `not_assessed` only during initial profiling and resolve it before a model
-run or deployment recommendation.
+review. Use `not_assessed` only during modeling preflight and resolve it before
+the experiment approval or any deployment recommendation.
 
 ## Required gate
 
@@ -88,10 +86,10 @@ information, authority, training, or a practical override path.
 
 ## Required reporting
 
-`config.json` must record `governance.risk_tier: "high"` and the domain owner,
-oversight, approval status, deployment decision and prohibited uses.
+`run.json.problem.governance` must record `risk_tier: "high"`, the domain
+owner, oversight, approval status, deployment decision, and prohibited uses.
 
-The model card and results must state:
+`report.html` and `results.md` must state:
 
 - intended and prohibited uses;
 - population, sites, periods and exclusions represented;

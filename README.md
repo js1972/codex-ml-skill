@@ -1,276 +1,271 @@
-# ml-model-builder
+# Tabular data and ML skills
 
-A shared Codex and Claude Code skill for understanding datasets and building
-reliable classical machine-learning solutions. It supports analysis-only work
-as well as reproducible model development, honest evaluation, and deployable
-training/inference artifacts.
+This repository contains two independent skills:
 
-## What it can do
+| Skill | Use it for | Persistent user-facing output |
+|---|---|---|
+| [`tabular-eda`](skills/tabular-eda/SKILL.md) | Explore, visualize, and explain a CSV or Parquet dataset without model building | Chat findings plus one self-contained `eda_report.html` |
+| [`ml-model-builder`](skills/ml-model-builder/SKILL.md) | Build, evaluate, compare, improve, and package a tabular ML solution | One compact model-run directory with an inclusive report and tested inference |
 
-| Capability | What the skill does |
-|---|---|
-| Dataset analysis | Profiles structure, types, missingness, duplicates, cardinality, imbalance, identifiers, outliers, correlations, and temporal coverage |
-| Cohort and label audit | Records how rows were sampled, why labels are observed, whether unlabeled rows are truly negative, and when representative weights or evaluation data are required |
-| Visual EDA | Produces labeled distribution, frequency, missingness, correlation, target, feature–target, and time-coverage charts with plain-language findings |
-| Large data | Routes beyond-memory local files through disk-backed DuckDB and guides warehouse, lakehouse, cluster, cloud-VM, and out-of-core execution |
-| Problem framing | Defines the business decision, row grain, target, prediction moment, error costs, horizon, review capacity, and deployment constraints |
-| Leakage prevention | Creates split assignments before target-aware EDA; audits post-outcome fields, target derivation, entity overlap, temporal look-ahead, and train/serve availability |
-| Classification | Handles binary, multiclass, imbalanced, probability, ranking, calibration, and decision-threshold use cases |
-| Regression | Supports robust losses, skewed targets, prediction intervals, asymmetric costs, and segment error analysis |
-| Forecasting | Uses rolling-origin evaluation, naive/seasonal baselines, safe lag features, horizon-specific metrics, intervals, and panel/intermittent-series guidance |
-| Anomaly detection | Separates supervised rare-event prediction from unlabeled anomaly ranking; evaluates review yield, stability, contamination, and domain feedback |
-| Model search | Chooses candidates from the problem before inspecting installed packages, considers XGBoost, LightGBM and CatBoost for supervised tabular work, and records every attempt or exclusion |
-| Model improvement | Preserves immutable parent runs and evaluation-exposure history while testing further improvements on valid development evidence |
-| Honest evaluation | Uses holdout, nested CV, external, or prospective validation as scientifically appropriate; reports uncertainty and subgroup/error slices |
-| High-stakes safeguards | Requires domain ownership, oversight, harm-specific evidence, approval status, and prospective/external validation before deployment claims |
-| Production handoff | Saves versioned data/schema/feature/split/run contracts, train/infer scripts, a fitted pipeline, pinned dependencies, model card, metrics, and reports |
-| Executable verification | Runs declared inference cases and verifies real prediction rows, columns, order, finite values, and checksums or golden tolerances |
-| Optional comparisons | Offers AutoGluon and SAP RPT only when appropriate and requested, then compares operational cost as well as predictive quality |
+Install either skill by itself or install both. They are siblings, not stages
+of one workflow.
 
-## Operating modes
+## EDA is independent
 
-| Mode | Outcome |
-|---|---|
-| Analysis only | A deterministic EDA report, charts, data profile, schema, fingerprint, prioritized findings, and recommended next actions—no placeholder model |
-| Model building | EDA plus baselines, model selection, predeclared honest evaluation, production artifacts, and stakeholder-ready results |
-| Model improvement | Audits an existing run, preserves the meaning of its historical evaluation, and uses fresh development evidence to improve it |
+`tabular-eda`:
 
-Analysis-only EDA may inspect the target across the full dataset. If that
-population is later reused for modeling, a new split does not make overlapping
-rows unexposed. Treat them as discovery/development data and use fresh
-external/prospective evidence for an unbiased final estimate; otherwise report
-the result as previously exposed evidence.
+- reads the source dataset;
+- explains important findings in chat;
+- writes one portable HTML report with inline styling and charts;
+- creates no README, Markdown summary, JSON profile, figure directory, split,
+  model, or run artifacts.
 
-## Workflow
-
-1. Frame the customer decision and prediction/scoring moment.
-2. Establish the population, sampling, label, target, governance, and inference
-   contracts.
-3. Persist and audit random, grouped, temporal, or grouped-temporal partitions
-   in a split manifest.
-4. Analyze the permitted population; target-aware EDA uses training rows only.
-5. Establish naive and fixed baselines, plus an incumbent comparison only when
-   an existing process is available and measurable.
-6. Freeze suitable candidates before dependency inspection, install selected
-   normal modeling dependencies, and search within an explicit compute budget.
-7. Select thresholds, calibration, intervals, horizons, or review capacity on
-   validation evidence.
-8. Evaluate using the predeclared holdout, untouched outer folds, external set,
-   or prospective cohort with uncertainty and error analysis.
-9. Test real inference outputs and document operational limitations.
-10. Save versioned run lineage and validate the complete artifact set.
-
-The core [SKILL.md](skills/ml-model-builder/SKILL.md) is deliberately a concise
-router. Detailed methodology lives in focused references, so Codex and Claude
-Code load only the guidance needed for the active task.
-
-## Model dependencies
-
-EDA and modeling perform separate dependency preflights. Packages installed for
-EDA never define the model search space. For supervised tabular work, the skill
-freezes candidates from task, data and deployment criteria even when package
-state is already known. XGBoost, LightGBM and CatBoost are normal modeling
-dependencies unless a concrete incompatibility or resource constraint applies,
-so missing selected libraries are installed into the project `.venv`. Every
-family receives one candidate-ledger row with the exact status vocabulary
-defined in the
-[governance reference](skills/ml-model-builder/references/governance.md#budget-and-dependency-control);
-exclusions are environment-independent and budget deferrals quantify the
-approved budget and shortfall. AutoGluon remains an explicit heavyweight
-opt-in. SAP RPT remains a separate opt-in remote benchmark and never replaces
-the required classical roster.
-
-## Optional SAP RPT benchmark
-
-For supervised classification or regression, the skill offers an optional SAP
-RPT comparison whether or not it performed the earlier EDA. The internal
-playground route avoids requiring the user to provision a BTP subaccount, SAP
-AI Core, and RPT deployments.
-
-The RPT repository is private, so Codex and Claude Code do not assume they can
-clone or configure it. When the user opts in, the skill:
-
-1. checks whether `sap-rpt` is already available;
-2. if needed, asks the user to clone
-   `https://github.tools.sap/DL-COE/rpt-cli`, follow its current installation
-   instructions, and complete the interactive playground configuration;
-3. waits for the user's confirmation without requesting credentials;
-4. runs a development-first comparison on the same valid splits and metric as
-   the local models;
-5. records context, deployment, request, latency, and reproducibility evidence.
-
-RPT results are labelled an internal, non-production, `benchmark_only`
-comparison with `limited_remote_service` reproducibility. If RPT wins, the
-report surfaces that result and explains that production use needs a separate
-supported serving design and validation.
-
-## EDA output
-
-Run the bundled profiler directly when useful:
+Run EDA with an existing interpreter that already has pandas and NumPy:
 
 ```sh
-python skills/ml-model-builder/scripts/profile_dataset.py \
-  --input data.csv \
-  --output-dir artefacts \
-  --mode analysis-only
+<python-with-pandas-and-numpy> \
+  skills/tabular-eda/scripts/analyze_tabular.py \
+  --input /absolute/path/to/data.csv \
+  --output /absolute/path/to/eda_report.html \
+  --target optional_target
 ```
 
-For model-building EDA, create the split first and identify the persisted
-training partition:
+The script prints chat-ready Markdown findings and persists only the requested
+HTML report. Parquet additionally requires `pyarrow` or `fastparquet`.
+
+`ml-model-builder` never discovers, reads, copies, links, or reacts to that
+report. It starts from the declared source data and performs only the narrow
+preflight required to validate a modeling experiment: target, prediction
+moment, row grain, cohort/labels, schema, groups/duplicates, leakage, feature
+availability, support, and split feasibility.
+
+For supported local files, run that modeling-only helper with an existing
+Python interpreter that already has pandas and NumPy:
 
 ```sh
-python skills/ml-model-builder/scripts/profile_dataset.py \
-  --input prepared.csv \
-  --output-dir artefacts/runs/example-run \
-  --mode model \
+<python-with-pandas-and-numpy> \
+  skills/ml-model-builder/scripts/inspect_model_data.py data.csv \
+  --target quality \
   --task classification \
-  --target churned \
-  --partition-column _ml_partition \
-  --train-label train \
-  --split-strategy stratified_random
+  --row-grain "one tested wine sample" \
+  --prediction-moment "after laboratory measurements are available"
 ```
 
-Run it from the project root so generated artifact pointers remain
-project-relative.
+It prints a compact modeling preflight to stdout and creates no files. It does
+not produce EDA. If the interpreter lacks a dependency, report that cleanly and
+use another existing suitable interpreter. Do not auto-install dependencies
+before experiment approval.
 
-The profiler intentionally:
+## Model-building approval
 
-- calculates statistics on all permitted rows and samples only expensive plots;
-- uses observed category and class labels directly in charts;
-- refuses model mode without a persisted partition;
-- keeps global EDA target-blind for nested-CV designs;
-- records partition support plus group, temporal, and duplicate-overlap audit
-  status without inspecting sealed targets;
-- requires the model split mechanics to be declared explicitly rather than
-  inferring them merely because a date or group column exists;
-- reports blockers, warnings, information, sampling, and interpretation limits;
-- exits with status `2` when it detects a modeling blocker such as a
-  single-class training target.
+Before any model is fitted, AutoGluon build starts, SAP RPT request is sent, or
+large optional dependency is installed, `ml-model-builder` presents one
+experiment plan for explicit approval:
 
-For a local file that is too large for safe in-memory pandas analysis, auto
-mode routes to DuckDB when installed:
+- target/label meaning, prediction moment, intended use, and prohibited uses;
+- eligible/excluded features;
+- evaluation rows, splits, primary metric, and uncertainty;
+- per-track CPU, memory, parallel-job, and GPU controls;
+- classical candidate families, minimum coverage, time, and Optuna trials;
+- AutoGluon choice, preset, time, and disk budget;
+- SAP RPT choice, context/query/batch/request/retry/timeout budget and access
+  route;
+- operational constraints used to recommend a winner.
+
+“Train the best model” does not silently mean “run a few classical models and
+ignore the optional systems.” The skill recommends a choice for each track and
+waits for the user to confirm or change it.
+
+## Three execution tracks
+
+| Track | Execution |
+|---|---|
+| Classical ML | Build naive/fixed baselines, fit preprocessing inside folds, and run bounded task-aware family search with optional Optuna |
+| AutoGluon | Supply eligible raw fold tables, target, metric, preset, folds, and time/resources; AutoGluon owns preprocessing, model building, tuning, and ensembling |
+| SAP RPT | Package labelled training-fold context and query rows, then query the pretrained model; no training, fitting, Optuna, or model hyperparameters |
+
+All approved tracks use the same target, prediction-time feature contract,
+evaluation row IDs, folds, weights, and metric code. Their implementation
+mechanics intentionally differ.
+
+The classical approval names the candidate families and minimum coverage. Its
+ledger uses unique candidate names and records why each family was considered,
+then marks it completed, failed, or excluded. The skill does not install or
+force every theoretically available library into every experiment.
+
+### SAP RPT
+
+SAP RPT is a production-capable tabular foundation model. The internal CLI is
+a convenient internal managed access route: users do not need to provision a
+BTP subaccount, SAP AI Core instance, service keys, or an RPT deployment for
+that route. Paying customers can use the same RPT model through SAP AI Core and
+manage their production route there.
+
+The internal-use status of the CLI describes the access channel, not the
+model's production capability. RPT is a first-class selectable backend and can
+be the best predictive candidate, the operational recommendation, or the
+default inference backend.
+
+The skill records the model separately from the access route. It manages and
+fingerprints labelled context, validates query/response alignment, records
+request/latency limits, and leaves a tested new-row command:
 
 ```sh
-python -m pip install duckdb
-
-python skills/ml-model-builder/scripts/profile_dataset.py \
-  --input very-large.csv \
-  --output-dir artefacts \
-  --engine auto \
-  --expected-source-bytes 50000000000 \
-  --duckdb-memory-limit 4GB \
-  --duckdb-temp-directory /path/to/fast-working-disk
+python infer.py --backend sap-rpt \
+  --input new_rows.csv --output predictions.csv
 ```
 
-DuckDB keeps memory bounded and spills to disk. If the data also exceeds local
-disk or practical local scan time, run profiling and feature preparation in
-the warehouse/lakehouse/cluster where the data already lives. See
-[large-data.md](skills/ml-model-builder/references/large-data.md).
+Credentials and interactive authentication remain user-managed and are never
+stored in artifacts.
 
-## Outputs
+## One experiment, one inclusive report
 
-| Artifact | Purpose |
-|---|---|
-| `data_report.html`, `data_summary.md`, `figures/` | Human-readable EDA and charts |
-| `data_profile.json`, `schema.json`, `data_fingerprint.json` | Versioned machine-readable data contract and provenance |
-| `config.json`, `feature_manifest.json`, `split_manifest.json` | Problem, split, feature, and selection decisions |
-| `run_manifest.json` | Immutable run identity, parent lineage, changes, and final-evaluation exposure |
-| `train.py`, `infer.py`, `model.joblib` or `model/` | Reproducible training and trusted local inference |
-| `metrics.json`, `model_card.md`, `results.md` | Evaluation, intended use, limitations, and stakeholder handoff |
-| `requirements.lock`, `inference_test.json` | Pinned environment and tested inference contract |
-| `sap_rpt/` | Optional RPT protocol, context, request/response, prediction, and hash evidence—never credentials |
+Classical, AutoGluon, and SAP RPT belong to one experiment when they share the
+same source fingerprint, target, eligible features, splits, evaluation rows,
+weights, and metric implementation.
 
-Never load an untrusted `joblib`/pickle file: deserialization can execute code.
+Adding an approved optional backend later updates that experiment with only:
 
-Validate the artifact contract and execute the declared inference round trip:
+- its required backend artifacts;
+- its approval, budget, and result in `run.json`;
+- refreshed inclusive `report.html` and `results.md`.
+
+It does not create a duplicate full run or copy the existing model, folds, OOF
+predictions, reports, plots, fixtures, or search outputs. Create a separate run
+only when the data, target, feature contract, split, metric, hypothesis, or
+released winner changes materially.
+
+## Model-run output
+
+```text
+artefacts/runs/<run-id>/
+├── run.json
+├── report.html
+├── results.md
+├── train.py                 # only with classical/AutoGluon rebuilds
+├── infer.py
+├── requirements.lock
+├── validation.json
+└── backends/
+    ├── classical/           # only when approved and attempted
+    ├── autogluon/           # only when approved and attempted
+    └── sap_rpt/             # only when approved and attempted
+```
+
+- `run.json` consolidates the problem/data contract, modeling preflight,
+  evaluation, approval and budgets, backend evidence, selection, inference,
+  and lineage.
+- `report.html` is self-contained and includes preflight, baselines, all
+  approved backend statuses/results, same-fold comparisons, uncertainty,
+  errors, intended/prohibited uses, limitations, monitoring, predictive winner,
+  operational recommendation, and commands. Classical baseline/leaderboard,
+  AutoGluon preset, and RPT context/access/latency sections appear whenever
+  those backends were approved and clearly state failed, unavailable, or
+  unmeasured dimensions.
+- `results.md` is the concise text handoff and carries the same required
+  statuses/scores, metric, selection, use constraints, uncertainty, monitoring,
+  backend-specific sections, and `infer.py` command.
+- `train.py` is required only when classical or AutoGluon build reproducibility
+  needs it. An RPT-only run must not contain it.
+- `infer.py` defaults to the approved operational backend and supports every
+  retained backend explicitly.
+- `run.json.inference` defines required/optional inputs, dtypes, missing/extra
+  policies, target exclusion, identifiers/feature order, output prediction and
+  probability columns, finite-value/bounds requirements, and one real dispatch
+  command per retained backend.
+- Backend directories contain only model/predictor/context material required
+  for rebuilding, inference, or a material audit.
+- `validation.json` records structural checks and real temporary inference
+  round trips. Every retained backend covers representative, single-row,
+  empty-input, and missing-required-column cases; repeated success cases must
+  be deterministic and preserve row IDs. Test fixtures and outputs are removed
+  after validation.
+
+Never load an untrusted pickle/joblib file: deserialization can execute code.
+
+Validate a model run:
 
 ```sh
 python skills/ml-model-builder/scripts/validate_run.py \
-  /path/to/project \
-  --artifacts-dir artefacts/runs/example-run \
+  /absolute/path/to/project \
+  --artifacts-dir artefacts/runs/<run-id> \
   --run-inference-test
 ```
 
-For new v2.1 runs this checks artifact consistency, split/run manifests,
-candidate outcomes, metric declarations, high-stakes governance, dependency
-locks, model hashes, and actual inference output. A command that exits
-successfully without predictions does not pass. It cannot prove that training
-code actually respected folds or that the scientific design was correct; the
-Skill also reconciles training code, logs, fold assignments, metrics, and
-reports.
+## Methodological safeguards
 
-New model and model-improvement runs use separate directories such as
-`artefacts/runs/<run_id>/`; stable artifact names live inside each directory.
-Analysis-only reports may continue to use `artefacts/`. Never overwrite a
-parent run when trying an improvement.
+The ML skill:
 
-## Installation for Codex and Claude Code
+- defines the prediction moment and label-observation process before features;
+- matches splits to time, groups, repeated entities, and source events;
+- keeps final evidence outside selection;
+- fits classical preprocessing, target encoding, resampling, calibration, and
+  feature selection within valid fold boundaries;
+- uses AutoGluon as an autonomous builder without external Optuna;
+- uses SAP RPT as a pretrained context/query model without training artifacts;
+- reports uncertainty, practical value, error/subgroup slices, and
+  operational limitations;
+- treats unlabeled anomaly detection as review prioritization;
+- applies stronger governance to high-stakes decisions;
+- never calls a search plateau the dataset's theoretical ceiling.
 
-Both hosts should link to the same authoritative source:
+## Installation
 
-| Host | User-level discovery path | Project-level discovery path |
+Each skill is independently installable. Link only the skill or skills you
+want.
+
+| Host | User-level path | Project-level path |
 |---|---|---|
-| Codex | `~/.agents/skills/ml-model-builder` | `.agents/skills/ml-model-builder` |
-| Claude Code | `~/.claude/skills/ml-model-builder` | `.claude/skills/ml-model-builder` |
+| Codex | `~/.agents/skills/<skill-name>` | `.agents/skills/<skill-name>` |
+| Claude Code | `~/.claude/skills/<skill-name>` | `.claude/skills/<skill-name>` |
 
-For a shared user-level installation:
+Example user-level installation for both:
 
 ```sh
-mkdir -p "$HOME/.agents/skills" "$HOME/.claude/skills"
+mkdir -p ~/.agents/skills ~/.claude/skills
 
+ln -s /absolute/path/to/codex-ml-skill/skills/tabular-eda \
+  ~/.agents/skills/tabular-eda
 ln -s /absolute/path/to/codex-ml-skill/skills/ml-model-builder \
-  "$HOME/.agents/skills/ml-model-builder"
+  ~/.agents/skills/ml-model-builder
 
+ln -s /absolute/path/to/codex-ml-skill/skills/tabular-eda \
+  ~/.claude/skills/tabular-eda
 ln -s /absolute/path/to/codex-ml-skill/skills/ml-model-builder \
-  "$HOME/.claude/skills/ml-model-builder"
+  ~/.claude/skills/ml-model-builder
 ```
 
-If either destination already exists, inspect it first and remove only the
-obsolete skill or link you intend to replace. Start a new Codex task or Claude
-Code session after the first installation. Later source edits are immediately
-available through the symlinks.
-
-`skills/ml-model-builder/` is the single source of truth used by both symlinks.
+Inspect an existing destination before replacing it. Start a new Codex task or
+Claude Code session after first installation.
 
 ## Repository layout
 
 ```text
-skills/ml-model-builder/
-├── SKILL.md
-├── agents/openai.yaml
-├── scripts/
-│   ├── profile_dataset.py
-│   ├── profile_large_dataset.py
-│   └── validate_run.py
-└── references/
-    ├── governance.md
-    ├── data-analysis.md
-    ├── large-data.md
-    ├── data-and-leakage.md
-    ├── supervised-tabular.md
-    ├── time-series.md
-    ├── anomaly-detection.md
-    ├── optimization-and-ensembling.md
-    ├── evaluation-and-production.md
-    ├── high-stakes.md
-    ├── automl.md
-    ├── sap-rpt.md
-    ├── artifacts.md
-    └── examples.md
+skills/
+├── tabular-eda/
+│   ├── SKILL.md
+│   ├── agents/openai.yaml
+│   └── scripts/analyze_tabular.py
+└── ml-model-builder/
+    ├── SKILL.md
+    ├── agents/openai.yaml
+    ├── scripts/
+    │   ├── inspect_model_data.py
+    │   ├── render_report.py
+    │   └── validate_run.py
+    └── references/
+        ├── governance.md
+        ├── large-data.md
+        ├── data-and-leakage.md
+        ├── supervised-tabular.md
+        ├── time-series.md
+        ├── anomaly-detection.md
+        ├── optimization-and-ensembling.md
+        ├── evaluation-and-production.md
+        ├── high-stakes.md
+        ├── automl.md
+        ├── sap-rpt.md
+        ├── artifacts.md
+        └── examples.md
 tests/
 ```
-
-## Design principles
-
-- Prefer a defensible simple model over complexity with weak evaluation.
-- Fit learned preprocessing and resampling inside training folds.
-- Match splits, metrics, permutations, and uncertainty to the data-generating
-  process.
-- Treat automated EDA and explainability as evidence for investigation, not
-  causal proof.
-- Treat unlabeled anomaly detection as review prioritization, not known
-  accuracy.
-- Record assumptions, limitations, failures, resource bounds, and stop reasons.
-- Preserve every improvement run and record when final evaluation evidence has
-  been viewed.
-- Never call a search plateau the dataset's theoretical predictive ceiling.

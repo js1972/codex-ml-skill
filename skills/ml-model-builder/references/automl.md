@@ -1,79 +1,120 @@
-# AutoGluon Comparison
+# AutoGluon Track
 
 ## Contents
 
-- [When to run](#when-to-run)
-- [Fair comparison](#fair-comparison)
-- [Final evaluation](#final-evaluation)
-- [Deployment comparison](#deployment-comparison)
-- [Required records](#required-records)
+- [Role](#role)
+- [Approval and inputs](#approval-and-inputs)
+- [Fair evaluation](#fair-evaluation)
+- [Execution](#execution)
+- [Selection and serving](#selection-and-serving)
+- [Artifacts](#artifacts)
 
-## When to run
+## Role
 
-Run only after explicit opt-in. Explain that AutoGluon adds a large optional
-dependency set and extra runtime. Do not probe or install it while preparing
-the ordinary environment-independent candidate roster.
+Treat AutoGluon as an autonomous model-building backend, not as another
+classical estimator or an Optuna candidate. The skill supplies an eligible raw
+table and experiment boundaries; AutoGluon owns preprocessing, model
+construction, tuning, bagging, stacking, and ensembling.
 
-Skip or reframe when:
+Do not:
 
-- the task is true forecasting (use an appropriate time-series benchmark
-  rather than the tabular API);
-- anomaly labels do not exist;
-- data is too small for a meaningful comparison;
-- the installed version cannot honor the required split/metric semantics.
+- transform the data through the classical preprocessing pipeline;
+- externally tune AutoGluon's models with Optuna;
+- engineer features solely for AutoGluon unless the user explicitly approves a
+  domain-required feature contract shared by all tracks;
+- serialize AutoGluon as `model.joblib`;
+- describe its internal constituent search as the skill's classical search.
 
-## Fair comparison
+“Raw” means the source-valued eligible feature columns after mandatory removal
+of target sources, post-outcome fields, identifiers not intended as features,
+and prohibited data. It does not permit leakage or invalid dtypes/semantics.
 
-- Use identical development and final/outer evaluation boundaries.
-- Give both approaches the same target, exclusions, metric implementation and
-  available-feature contract.
-- Pass training data to `TabularPredictor.fit` and explicit validation through
-  `tuning_data` or the version-equivalent mechanism.
-- Keep holdout/external/active outer-fold targets out of tuning, ensembling and
-  early stopping.
-- Record AutoGluon version, preset, time limit, included/excluded families and
-  hardware.
+## Approval and inputs
 
-Use `medium_quality` as a bounded benchmark only when it fits the user's
-budget. Do not imply it is AutoGluon's maximum achievable quality.
+Include AutoGluon in the mandatory experiment approval. Present:
 
-## Final evaluation
+- include or decline;
+- task and target;
+- raw eligible feature contract;
+- evaluation folds and primary metric;
+- preset;
+- wall-time, CPU count, parallel jobs, GPU flag, memory, and disk budget;
+- any family/resource restrictions;
+- expected dependency size and installation impact.
 
-Compare permitted development evidence first. Finalize/refit both candidates
-where valid, then score them under the same declared evaluation design. For
-nested CV this means rerunning each complete AutoML selection inside every
-outer training fold; skip the comparison when that cost is unjustified.
+Do not probe or install AutoGluon before approval. If installation is required,
+obtain any additional approval required for the large dependency.
 
-Do not silently replace the transparent pipeline. If the user chooses based on
-holdout, label that set a benchmark-selection set and require future/external
-data for an unbiased selected-model estimate.
+Use this track for supported tabular classification or regression. Reframe or
+decline when the task requires a different AutoGluon API, the data cannot
+support the evaluation design, or the installed release cannot honor the
+approved split and metric semantics.
 
-Describe observed gaps as small/moderate/large only as plain-language bands;
-do not call them confidence intervals.
+## Fair evaluation
 
-## Deployment comparison
+Use the same:
 
-Measure both candidates in the same environment:
+- source population and target definition;
+- prediction-time eligible features;
+- weights and label-observation semantics;
+- development/evaluation row IDs and folds;
+- primary metric implementation;
+- final evidence boundary.
 
-- serialized artifact/directory size;
+Pass raw fold-training rows to `TabularPredictor.fit`. Supply explicit
+validation/tuning rows when the API and approved design support them. Keep
+holdout, external, prospective, and active outer-fold targets out of
+AutoGluon model building, dynamic stacking, calibration, and early stopping.
+
+Under nested CV, rerun the complete AutoGluon builder inside every outer
+training partition. Decline the track when that cost exceeds the approved
+budget rather than running an incomparable shortcut.
+
+## Execution
+
+Let AutoGluon manage its own pipeline. Record:
+
+- AutoGluon and Python versions;
+- preset, time limit, resource limits, and dynamic-stacking settings;
+- included/excluded internal model families when constrained;
+- fold IDs and row counts supplied;
+- native leaderboard summary;
+- failures, elapsed time, peak memory, and disk usage when measurable;
+- stop reason.
+
+Do not claim that one preset or time limit is AutoGluon's maximum achievable
+quality. Report it as the approved bounded build.
+
+## Selection and serving
+
+Compare AutoGluon with other approved tracks first on permitted development
+evidence and then under the declared final evaluation design. Use the same rows
+and metric code. Measure deployment properties in the same environment when
+they affect selection:
+
+- predictor-directory size;
 - warm median and p95 latency at batch size 1 and a representative batch;
 - cold start and peak memory when measurable;
-- runtime/dependency/native-library requirements.
+- runtime, native-library, CPU/GPU, and disk requirements.
 
-Record hardware, versions, warm-up, repetitions, sample and batch size. Label
-unmeasured dimensions. Do not publish universal latency/memory multipliers or
-claim serverless/edge compatibility without checking the actual target.
+Permit AutoGluon to be the predictive or operational winner. Do not silently
+replace the approved default backend; record the selection decision and exact
+inference command.
 
-## Required records
+## Artifacts
 
-Populate `metrics.json.autogluon` with:
+Keep:
 
-- `attempted`, `reason`;
-- `version`, `preset`, `time_limit_seconds`;
-- development and declared final/outer metrics;
-- direction-aware gap versus the main pipeline;
-- execution mode/task ID;
-- measured deployment properties and context.
+```text
+backends/autogluon/
+└── predictor/
+```
 
-Save the predictor directory under `artefacts/autogluon_predictor/` and document
-trusted loading/inference requirements without replacing `model.joblib`.
+Record build settings, metrics, directory hash, resource results, and inference
+requirements in root `run.json`. Use root `train.py --backend autogluon` to
+rebuild and root `infer.py --backend autogluon` for new rows. Test that
+inference loads the native predictor and preserves row alignment.
+
+Do not create separate AutoGluon config, metric, model-card, or report files.
+Do not copy the classical model, transformed data, Optuna study, split
+manifests, fixtures, or root reports into its directory.

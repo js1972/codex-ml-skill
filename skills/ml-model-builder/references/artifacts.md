@@ -1,908 +1,683 @@
-# Artifact Contract and Schemas
+# Minimal Model-Run Artifacts
 
 ## Contents
 
-- [Versioning](#versioning)
-- [Analysis-only outputs](#analysis-only-outputs)
-- [Model outputs](#model-outputs)
-- [Run and split manifests](#run-and-split-manifests)
-- [config.json](#configjson)
-- [metrics.json](#metricsjson)
-- [SAP RPT optional comparison](#sap-rpt-optional-comparison)
-- [Task-specific evaluation contracts](#task-specific-evaluation-contracts)
-- [Data and inference contracts](#data-and-inference-contracts)
-- [Human-readable reports](#human-readable-reports)
-- [Validation](#validation)
-- [Legacy compatibility](#legacy-compatibility)
+- [Principles](#principles)
+- [Exact run layout](#exact-run-layout)
+- [run.json](#runjson)
+- [Backend artifacts](#backend-artifacts)
+- [Entry points](#entry-points)
+- [Reports](#reports)
+- [Adding a backend to the same experiment](#adding-a-backend-to-the-same-experiment)
+- [validation.json](#validationjson)
 
-## Versioning
+## Principles
 
-Use `schema_version: "2.1"` in `config.json`, `metrics.json`,
-`data_profile.json`, `schema.json`, `feature_manifest.json`, and
-`data_fingerprint.json`, `split_manifest.json` and `run_manifest.json`.
+Create the smallest artifact set that can explain the approved experiment,
+reproduce its evaluation within the declared evidence limits, rebuild
+build-based backends, infer with every retained backend, and validate the
+handoff.
 
-Keep artifact filenames stable. Add fields compatibly; do not silently change
-the meaning of an existing field. Record deprecations in
-`config.json.compatibility`. Read v2.0 and legacy v1 artifacts, but write new
-runs as v2.1.
+Use one consolidated `run.json`. Do not split the contract across config,
+schema, feature, split, metric, model-card, and run-manifest files.
 
-## Analysis-only outputs
+Do not include EDA files, `README.md`, external figures, cache directories,
+retained inference outputs, copied parent artifacts, or redundant manifests.
 
-Required:
+## Exact run layout
 
-- `artefacts/config.json`
-- `artefacts/data_profile.json`
-- `artefacts/data_report.html`
-- `artefacts/data_summary.md`
-- `artefacts/data_fingerprint.json`
-- `artefacts/schema.json`
-- `artefacts/figures/` with selected PNG charts
+The run root may contain only:
 
-Do not create placeholder model files.
-
-## Model outputs
-
-For every new v2.1 model run, choose an immutable project-relative run
-directory such as `artefacts/runs/<run_id>/`. Pass that directory to profilers
-with `--output-dir` and to the validator with `--artifacts-dir`. Keep stable
-filenames inside it. The lists below use `<run-dir>` for that selected
-directory; place the required analysis outputs there as well.
-
-Required in addition to analysis outputs:
-
-- `<run-dir>/train.py`
-- `<run-dir>/infer.py`
-- `<run-dir>/model.joblib` or a versioned `<run-dir>/model/` directory when the
-  deployable solution contains multiple fitted components
-- `<run-dir>/metrics.json`
-- `<run-dir>/feature_manifest.json`
-- `<run-dir>/split_manifest.json`
-- `<run-dir>/run_manifest.json`
-- `<run-dir>/model_card.md`
-- `<run-dir>/requirements.lock` or an equivalent fully pinned inference
-  environment
-- `<run-dir>/inference_test.json`
-- `<run-dir>/results.md`
-
-Optional:
-
-- `<run-dir>/shap_summary.html`
-- `<run-dir>/autogluon_predictor/`
-- `<run-dir>/sap_rpt/` for optional benchmark protocol and prediction evidence
-- `<run-dir>/search.db` for resumable Optuna storage
-- `predictions.csv`, `review_queue.csv`, or another requested operational
-  scoring output with passthrough identifiers, as-of timestamp, model/data
-  version, scores/ranks and eligibility/exclusion reasons
-
-Never load an untrusted `model.joblib` or execute untrusted `train.py`,
-`infer.py` or inference-test commands.
-
-## Run and split manifests
-
-Write every improvement into a new artifact directory. Do not overwrite its
-parent. Use `run_manifest.json`:
-
-```json
-{
-  "schema_version": "2.1",
-  "run_id": "20260728T143000Z-lightgbm-v2",
-  "run_kind": "improvement",
-  "artifact_directory": "artefacts/runs/20260728T143000Z-lightgbm-v2",
-  "parent_run_id": "20260727T110000Z-baseline",
-  "parent_artifact_hashes": {
-    "config.json": "sha256:...",
-    "metrics.json": "sha256:...",
-    "run_manifest.json": "sha256:..."
-  },
-  "code_revision": "git:abcdef123456",
-  "data_fingerprint": "sha256:...",
-  "split_fingerprint": "sha256:...",
-  "created_at": "2026-07-28T14:30:00Z",
-  "changes": ["added native categorical candidates"],
-  "roster_frozen_at": "2026-07-28T15:00:00Z",
-  "prior_evidence": [
-    {
-      "source_run_id": "20260727T110000Z-baseline",
-      "run_manifest_sha256": "sha256:...",
-      "metrics_sha256": "sha256:...",
-      "status": "benchmark_selection",
-      "final_set": "holdout_test",
-      "population_fingerprint": "sha256:...",
-      "opened_at": "2026-07-27T13:00:00Z",
-      "opened_for": "parent final report",
-      "values_viewed": ["primary metric"],
-      "decisions_influenced": ["v2 candidate hypothesis"]
-    }
-  ],
-  "evaluation_exposure": {
-    "status": "sealed",
-    "final_set": "holdout_test",
-    "population_fingerprint": "sha256:...",
-    "opened_at": null,
-    "opened_for": null,
-    "values_viewed": [],
-    "decisions_influenced": []
-  }
-}
+```text
+artefacts/runs/<run-id>/
+├── run.json
+├── report.html
+├── results.md
+├── train.py                 # only with retained classical/AutoGluon
+├── infer.py
+├── requirements.lock
+├── validation.json
+└── backends/                # selected backends only
+    ├── classical/
+    ├── autogluon/
+    └── sap_rpt/
 ```
 
-For an initial run, use `run_kind: "initial"`, a null `parent_run_id`, an empty
-parent-hash object and `prior_evidence: []`. Every improvement carries forward
-append-only parent/ancestor evidence references and must include its direct
-parent. Bind each reference to the source `run_manifest.json` and
-`metrics.json` SHA-256 values; bind the direct parent config, metrics and run
-manifest in `parent_artifact_hashes`. Do not rewrite the parent when its
-evidence later influences a child. If final
-evidence has influenced a decision, use `benchmark_selection` and stop
-describing that set as an unbiased test for later improvements.
+Require `run.json`, `report.html`, `results.md`, `infer.py`,
+`requirements.lock`, and `validation.json`. Require `train.py` when a retained
+classical or AutoGluon backend needs rebuilding. Forbid `train.py` in an
+SAP-RPT-only run.
 
-Use exposure states consistently:
+Create a backend directory only for an approved track. Do not create
+`extensions/`, `diagnostics/`, `figures/`, `inference_outputs/`, or
+`__pycache__/` directories.
 
-- `sealed` before any final value is viewed;
-- `opened` after the predeclared final evaluation is reported;
-- `benchmark_selection` if those values influence another choice;
-- `pending_labels` while a prospective cohort has not matured.
+## run.json
 
-Always identify the final set and its population fingerprint. For `sealed` and
-`pending_labels`, keep `opened_at`/`opened_for` null and both audit arrays empty.
-For `opened`, record the timestamp, purpose and non-empty `values_viewed`, while
-`decisions_influenced` remains empty. Use `benchmark_selection` once a
-subsequent decision is influenced and list that decision explicitly.
+Use exactly these top-level contracts:
 
-Use `split_manifest.json` to make the evaluation population reproducible:
+- `run_id`;
+- `created_at`;
+- `problem`;
+- `data`;
+- `modeling_preflight`;
+- `evaluation`;
+- `approval`;
+- `backends`;
+- `selection`;
+- `inference`;
+- `lineage`.
 
-```json
-{
-  "schema_version": "2.1",
-  "strategy": "grouped_temporal",
-  "assignment": {
-    "column": "_ml_partition",
-    "source": "persisted_column",
-    "fingerprint": {
-      "algorithm": "sha256",
-      "value": "...",
-      "basis": "invoice_id plus partition label"
-    }
-  },
-  "partitions": [
-    {"name": "train", "role": "development", "rows": 80000},
-    {"name": "holdout", "role": "final_evaluation", "rows": 20000}
-  ],
-  "audits": {
-    "group_overlap": {
-      "checked": true,
-      "groups_spanning_partitions": 0,
-      "null_group_rows": 0,
-      "allowed": false
-    },
-    "temporal_order": {
-      "checked": true,
-      "valid": true,
-      "invalid_timestamp_rows": 0,
-      "purge_gap": "90 days",
-      "ranges": [
-        {
-          "name": "train",
-          "rows": 80000,
-          "start": "2023-01-01T00:00:00+00:00",
-          "end": "2024-09-30T23:59:59+00:00"
-        },
-        {
-          "name": "holdout",
-          "rows": 20000,
-          "start": "2025-01-01T00:00:00+00:00",
-          "end": "2025-06-30T23:59:59+00:00"
-        }
-      ]
-    },
-    "duplicate_overlap": {
-      "checked": true,
-      "rows_crossing_partitions": 0
-    }
-  }
-}
-```
-
-For a non-applicable audit, set `checked: false` and record why. For nested CV,
-set `config.split.development_label` to null: each outer-training population is
-the complement of its outer-evaluation fold, not a separate disjoint
-partition. Partition every non-discovery row into an `outer_evaluation` fold
-and record matching fold IDs/support; a seed alone is not a split manifest.
-This generic complement contract is only valid for non-temporal nested CV.
-For future prediction, use rolling-origin development folds inside a holdout,
-external or prospective final design; do not let future outer folds enter a
-training complement.
-
-If nested-CV modeling uses a separate target-aware discovery cohort, give its
-partition `role: "discovery_excluded"`, record its fingerprint and set
-`analysis.target_aware_partition` to that partition with
-`analysis.discovery_excluded_from_outer: true`. No discovery row may appear in
-an outer fold. Without such a cohort, set the global target-aware partition to
-null.
-
-## config.json
-
-Use `mode: "analysis-only"`, `"model-building"` or `"model-improvement"`.
-Use this model-building shape:
+The following example shows the required shape for an experiment retaining all
+three backends:
 
 ```json
 {
-  "schema_version": "2.1",
-  "mode": "model-building",
+  "run_id": "20260729T120000Z-wine-quality",
+  "created_at": "2026-07-29T12:00:00+08:00",
   "problem": {
     "task": "classification",
-    "business_decision": "prioritize invoices for manual review",
-    "target": "late_payment",
-    "target_derivation": null,
-    "prediction_moment": "invoice issue time",
-    "row_grain": "one row per invoice",
-    "cohort": {
-      "source_population": "all issued invoices eligible for review",
-      "inclusion_rule": "issued in the scoring region and period",
-      "label_observation": "payment outcome observed after 90-day maturity",
-      "sampling_design": "complete cohort",
-      "inclusion_probability": 1.0,
-      "sample_weight": null,
-      "evaluation_representative": true,
-      "calibration_representative": true,
-      "selective_labels": false,
-      "label_acquisition": null
-    },
-    "group_column": "customer_id",
-    "time_column": "invoice_date",
-    "error_costs": {
-      "false_positive": "review time",
-      "false_negative": "missed late payment"
+    "target": "quality_class",
+    "prediction_moment": "after laboratory measurements are available",
+    "row_grain": "one row per wine sample",
+    "intended_use": "decision support for comparing wine-quality classifiers",
+    "prohibited_uses": [
+      "not for autonomous safety or health decisions"
+    ],
+    "feature_contract": {
+      "included": ["fixed_acidity", "alcohol"],
+      "excluded": ["quality_class", "sample_id"]
     }
   },
   "data": {
-    "locations": ["data.csv"],
-    "fingerprint_file": "artefacts/runs/20260728T143000Z-lightgbm-initial/data_fingerprint.json",
-    "schema_file": "artefacts/runs/20260728T143000Z-lightgbm-initial/schema.json",
-    "split_manifest": "artefacts/runs/20260728T143000Z-lightgbm-initial/split_manifest.json"
+    "source": "winequality-red.csv",
+    "fingerprint": "sha256:...",
+    "row_count": 1599
   },
-  "split": {
-    "strategy": "grouped_temporal",
-    "group_overlap_policy": "disallow",
-    "assignment_column": "_ml_partition",
-    "development_label": "train",
-    "holdout_target_sealed": true,
-    "seed": 42
+  "modeling_preflight": {
+    "status": "passed",
+    "target_validated": true,
+    "row_grain_validated": true,
+    "prediction_moment_validated": true,
+    "leakage_reviewed": true,
+    "feature_availability_reviewed": true,
+    "split_suitable": true,
+    "findings": [
+      "Stratification preserves every observed quality class."
+    ]
   },
   "evaluation": {
-    "design": "holdout",
-    "status": "complete",
-    "final_eval_set": "holdout_test",
-    "independent_test": true,
-    "selection_nested": false
-  },
-  "analysis": {
-    "report": "artefacts/runs/20260728T143000Z-lightgbm-initial/data_report.html",
-    "target_aware_partition": "train",
-    "pre_partition_target_exposure": {
-      "status": "none",
-      "source": null,
-      "final_population_overlap": false,
-      "values_viewed": [],
-      "decisions_influenced": []
-    },
-    "plot_sample_size": 10000,
-    "plot_sample_seed": 42,
-    "reported_columns": ["customer_id", "email"]
-  },
-  "feature_contract": {
-    "manifest": "artefacts/runs/20260728T143000Z-lightgbm-initial/feature_manifest.json",
-    "inference_unavailable": ["payment_date", "final_status"],
-    "sensitive_attributes": ["region"],
-    "target_sources_excluded": []
-  },
-  "selection": {
-    "primary_metric": "average_precision",
-    "secondary_metrics": ["log_loss", "recall_at_review_capacity"],
-    "validation": "grouped_temporal_cv",
-    "threshold_rule": "top 200 invoices per week",
-    "calibration": {
-      "method": "sigmoid",
-      "protocol": "grouped-temporal out-of-fold",
-      "final_fit": "calibrated-CV ensemble retained for inference"
-    },
-    "capacity": {
-      "enabled": true,
-      "unit": "week",
-      "limit": 200,
-      "timezone": "Australia/Perth",
-      "cutoff": "Monday 09:00",
-      "eligibility_rule": "open invoices only",
-      "tie_breaker": "invoice_id ascending",
-      "sub_capacity_behavior": "return every eligible invoice"
-    }
-  },
-  "baselines": {
-    "incumbent": {
-      "available": false,
-      "reason": "no existing scored process"
-    }
-  },
-  "search": {
-    "sampler": "TPESampler",
-    "budget_seconds": 1800,
-    "stop_reason": "budget",
-    "execution_mode": "managed_process",
-    "task_or_session_id": "host-process-123",
-    "roster_frozen_at": "2026-07-28T15:00:00Z",
-    "candidates": [
-      {
-        "family": "xgboost",
-        "consideration_basis": "nonlinear tabular interactions are plausible",
-        "suitability_status": "eligible",
-        "dependency_status": "installed_for_run",
-        "execution_status": "attempted",
-        "reason": null
-      },
-      {
-        "family": "lightgbm",
-        "consideration_basis": "efficient histogram boosting fits the data size",
-        "suitability_status": "eligible",
-        "dependency_status": "installed",
-        "execution_status": "attempted",
-        "reason": null
-      },
-      {
-        "family": "catboost",
-        "consideration_basis": "native categoricals considered for high cardinality",
-        "suitability_status": "excluded",
-        "dependency_status": "not_required",
-        "execution_status": "excluded",
-        "reason": "deployment image does not support its native runtime"
-      }
-    ]
-  },
-  "run": {
-    "manifest": "artefacts/runs/20260728T143000Z-lightgbm-initial/run_manifest.json",
-    "run_id": "20260728T143000Z-lightgbm-initial",
-    "run_kind": "initial"
-  },
-  "comparison": {
-    "autogluon": false,
-    "sap_rpt": false
-  },
-  "governance": {
-    "risk_tier": "standard",
-    "risk_assessed": true,
-    "risk_assessment_rationale": "does not affect an individual's essential rights",
-    "unresolved_hazards": [],
-    "domain_owner": "accounts-receivable operations",
-    "deployment_decision": "decision_support",
-    "approval_status": "not_required"
-  },
-  "environment": {
-    "python": "3.x.y",
-    "platform": "recorded at runtime",
-    "requirements": "artefacts/runs/20260728T143000Z-lightgbm-initial/requirements.lock"
-  },
-  "compatibility": {
-    "reads_legacy_v1": true,
-    "reads_schema_v2_0": true,
-    "deprecated_fields": ["ceiling_check"]
-  }
-}
-```
-
-In `problem.cohort`, use `inclusion_probability: 1.0` for a complete cohort.
-For a sampled design, use either a numeric probability in `(0, 1]` or an
-object containing exactly one of `column` or `formula`, plus optional `scope`.
-Use `sample_weight: null` when no weight applies; otherwise use an object
-containing exactly one of `column` or `formula`, plus `scope` (`training`,
-`evaluation`, `calibration` or a declared combination). State separately
-whether evaluation and calibration populations represent deployment.
-
-Set `selective_labels: false` and `label_acquisition: null` only when label
-observation is not controlled by review, treatment, response or another
-selection policy. Otherwise set `selective_labels: true` and record
-`label_acquisition.development` (mechanism, positivity and optional
-selection-probability column/formula) plus `label_acquisition.evaluation`
-(identified design, positivity, selection unit, claim scope, probability
-support and whether population performance/calibration are supported). For
-fixed-capacity off-policy evaluation, row propensities alone are insufficient;
-the probability scope must be the queue or slate.
-
-## metrics.json
-
-Keep every metric name, direction, dataset and uncertainty explicit:
-
-```json
-{
-  "schema_version": "2.1",
-  "task": "classification",
-  "primary_metric": {
-    "name": "average_precision",
-    "direction": "maximize"
-  },
-  "baselines": {
-    "naive": {
-      "validation_mean": 0.12
-    },
-    "fixed": {
-      "model": "LogisticRegression",
-      "validation_mean": 0.41,
-      "validation_std": 0.03
-    }
-  },
-  "signal_diagnostics": {
-    "kind": "group_preserving_permutation",
-    "permutations": 99,
-    "empirical_p_value": 0.01,
-    "effect_size": 0.29,
-    "verdict": "learnable signal detected"
-  },
-  "search": {
-    "completed_trials": 84,
-    "failed_trials": 2,
-    "best_family": "LightGBM",
-    "validation_mean": 0.53,
-    "validation_std": 0.02,
-    "stop_reason": "budget",
-    "plateau_detected": false,
-    "family_results": [
-      {
-        "family": "xgboost",
-        "status": "attempted",
-        "completed_trials": 20,
-        "best_validation": 0.51
-      },
-      {
-        "family": "lightgbm",
-        "status": "attempted",
-        "completed_trials": 24,
-        "best_validation": 0.53
-      }
-    ]
-  },
-  "stacking": {
-    "attempted": true,
-    "adopted": false,
-    "reason": "gain was not repeatable across folds"
-  },
-  "selection": {
-    "model": "LightGBM",
-    "threshold_rule": "top 200 invoices per week",
-    "calibration": "sigmoid"
-  },
-  "final": {
-    "eval_set": "holdout_test",
-    "score": 0.51,
-    "metric": "average_precision",
-    "confidence_interval": [0.47, 0.55],
-    "uncertainty": {
-      "method": "customer-week block bootstrap with queue reselection",
-      "confidence_level": 0.95,
-      "resampling_unit": "customer_week",
-      "repetitions": 2000,
-      "seed": 42,
-      "effective_sample_size": 4120,
-      "capacity_unit": "week",
-      "selection_population": "full_eligible_queue",
-      "policy_recomputed_per_resample": true
-    },
-    "secondary": {
-      "log_loss": 0.31,
-      "recall_at_review_capacity": 0.68
-    }
-  },
-  "subgroups": {
-    "reported": true,
-    "minimum_support": 50,
-    "summary": "see results.md"
-  },
-  "autogluon": {
-    "attempted": false,
-    "reason": "user did not opt in"
-  },
-  "sap_rpt": {
-    "attempted": false,
-    "status": "not_attempted",
-    "role": "benchmark_only",
-    "reason": "user did not opt in"
-  }
-}
-```
-
-Retain the top-level `final` object for existing consumers.
-
-Keep candidate suitability, dependency and execution states separate.
-`not installed` is not a scientific exclusion. Every attempted family in
-`config.json.search.candidates` must have a corresponding family result; every
-non-attempted family must have a concrete reason. Every candidate also records
-an environment-independent `consideration_basis`.
-
-Record whether an incumbent operational process exists in
-`config.json.baselines.incumbent`. Require its metric only when it exists and
-can be measured fairly on the same evaluation population. Store an available
-result in `metrics.json.baselines.incumbent` with a finite `score`, the
-`metric`, `eval_set` and `population_fingerprint`; the metric must match the
-declared primary metric.
-
-Record the uncertainty method, confidence level, resampling unit and effective
-sample size/support. Add repetitions and seed when the method uses them. A bare
-interval is not enough for new v2.1 runs.
-
-## SAP RPT optional comparison
-
-Keep SAP RPT outside `search.candidates`. When the user declines it, use
-`config.json.comparison.sap_rpt: false`; `metrics.json.sap_rpt` may be omitted
-or record `attempted: false` with a concrete reason.
-
-Use `status: "not_attempted"` when no request ran, `"completed"` when valid
-development evidence exists, and `"failed"` when a request ran but produced no
-valid comparison. A failed attempt records a reason and request failure count
-without claiming development or final evidence.
-
-After opt-in, record:
-
-```json
-{
-  "comparison": {
-    "sap_rpt": {
-      "opted_in": true,
-      "role": "benchmark_only",
-      "installation": {
-        "repository": "https://github.tools.sap/DL-COE/rpt-cli",
-        "user_managed": true,
-        "configured_by_user": true
-      },
-      "external_data_transfer": {
-        "confirmed": true,
-        "destination": "SAP RPT internal playground",
-        "scope": "fold-training context features and labels plus query features"
-      }
-    }
-  }
-}
-```
-
-The private clone, installation, and interactive configuration remain
-user-managed. If the user opted in but setup or endpoint use did not complete,
-set `configured_by_user` or `confirmed` false and record an unattempted result
-with the reason. Never store credentials.
-
-For an attempted benchmark, add:
-
-```json
-{
-  "sap_rpt": {
-    "attempted": true,
-    "status": "completed",
-    "reason": null,
-    "role": "benchmark_only",
-    "client_version": "0.2.1",
-    "client_source_revision": "git:119d55b...",
-    "auth_mode": "playground",
-    "endpoint": "SAP RPT internal playground",
-    "model_id": "sap-rpt-1.5-standard",
-    "deployment_id": "actual-playground-deployment",
-    "context": {
-      "strategy": "stratified_fold_context",
-      "seed": 42,
-      "rows": 2048,
-      "training_only": true,
-      "fingerprint": "sha256:..."
-    },
+    "design": "repeated_stratified_cross_validation",
     "split_fingerprint": "sha256:...",
-    "development": {
-      "metric": "average_precision",
-      "score": 0.49,
-      "fold_scores": [0.47, 0.51]
-    },
-    "final": null,
-    "request_count": 8,
-    "failed_request_count": 0,
-    "completed_at": "2026-07-28T10:00:00Z",
-    "reproducibility_status": "limited_remote_service",
-    "selection_influenced": false
-  }
-}
-```
-
-Bind `split_fingerprint` to `run_manifest.json.split_fingerprint`. The
-development metric must match the primary selection metric. If `final` is
-present, require its metric, evaluation set, and population fingerprint to
-match the main final-evaluation contract. When it influences a later choice,
-set `selection_influenced: true` and mark the run's evaluation exposure
-`benchmark_selection`.
-
-Keep evidence under `<run-dir>/sap_rpt/`: the project-local benchmark script,
-protocol, context manifest and row-ID hash, request/response manifests, raw
-response hashes, predictions, timings, and failure log. Do not place RPT in
-`search.best_family` or the deployable `selection.model`. State
-`benchmark_only`, `limited_remote_service`, and the internal non-production
-limitation in `results.md`.
-
-For `evaluation.design: "nested_cv"`, use
-`final.eval_set: "outer_cv"`, set `selection_nested: true` and
-`independent_test: false`, and store outer-fold scores, an explicit
-mean/median aggregation, and uncertainty. Do not combine this generic contract
-with temporal split mechanics, because a fold complement would contain future
-rows. Do not call it an independent holdout result. `external_test` and
-`prospective_validation` designs must fingerprint and describe the external or
-future cohort.
-
-For a prospective cohort whose outcomes have not matured, use
-`evaluation.status: "pending_labels"` and:
-
-```json
-{
-  "final": {
-    "eval_set": "prospective_validation",
-    "score": null,
-    "metric": "average_precision",
-    "outcomes_mature": false,
-    "validated_performance_available": false,
-    "maturity_rule": "90 days after prediction",
-    "cohort_counts": {
-      "scored": 12000,
-      "matured": 0,
-      "pending": 12000,
-      "lost_to_follow_up": 0
+    "evaluation_rows_fingerprint": "sha256:...",
+    "primary_metric": {
+      "name": "macro_f1",
+      "direction": "maximize"
     }
+  },
+  "approval": {
+    "approved_at": "2026-07-29T12:05:00+08:00",
+    "scope": {
+      "target": true,
+      "feature_contract": true,
+      "split_design": true,
+      "primary_metric": true
+    },
+    "tracks": {
+      "classical": {
+        "selected": true,
+        "status": "approved",
+        "budget": {
+          "cpu_count": 4,
+          "parallel_jobs": 2,
+          "memory_gb": 8,
+          "gpu_enabled": false,
+          "candidate_families": ["gradient_boosting"],
+          "time_limit_seconds": 1200,
+          "optuna_trials": 30,
+          "minimum_family_coverage": 1
+        }
+      },
+      "autogluon": {
+        "selected": true,
+        "status": "approved",
+        "budget": {
+          "cpu_count": 4,
+          "parallel_jobs": 1,
+          "memory_gb": 8,
+          "gpu_enabled": false,
+          "preset": "best_quality",
+          "time_limit_seconds": 1200,
+          "disk_gb": 20
+        }
+      },
+      "sap_rpt": {
+        "selected": true,
+        "status": "approved",
+        "budget": {
+          "cpu_count": 2,
+          "parallel_jobs": 1,
+          "memory_gb": 4,
+          "gpu_enabled": false,
+          "max_requests": 20,
+          "max_context_rows": 512,
+          "max_query_rows": 320,
+          "max_rows_per_request": 40,
+          "max_retries": 2,
+          "timeout_seconds": 120
+        }
+      }
+    }
+  },
+  "backends": {
+    "classical": {
+      "status": "completed",
+      "retained": true,
+      "evaluation": {
+        "split_fingerprint": "sha256:...",
+        "evaluation_rows_fingerprint": "sha256:...",
+        "primary_metric": "macro_f1",
+        "score": 0.72
+      },
+      "evidence": {
+        "result_source": "shared_evaluation_rows",
+        "rows_scored": 320
+      },
+      "preprocessing": {
+        "scope": "fold_local",
+        "steps": ["median_imputation", "standardization"]
+      },
+      "search": {
+        "method": "optuna",
+        "trials_budget": 30,
+        "trials_completed": 30
+      },
+      "candidates": [
+        {
+          "name": "xgboost",
+          "family": "gradient_boosting",
+          "consideration_basis": "nonlinear interactions within the approved CPU budget",
+          "status": "completed",
+          "score": 0.72
+        }
+      ],
+      "artifacts": {
+        "model": "backends/classical/model.joblib"
+      }
+    },
+    "autogluon": {
+      "status": "completed",
+      "retained": true,
+      "evaluation": {
+        "split_fingerprint": "sha256:...",
+        "evaluation_rows_fingerprint": "sha256:...",
+        "primary_metric": "macro_f1",
+        "score": 0.79
+      },
+      "evidence": {
+        "result_source": "shared_evaluation_rows",
+        "rows_scored": 320
+      },
+      "build": {
+        "preset": "best_quality",
+        "time_limit_seconds": 1200,
+        "predictor_path": "backends/autogluon/predictor"
+      },
+      "data_handling": {
+        "raw_tabular": true,
+        "external_preprocessing": false,
+        "external_optuna": false
+      }
+    },
+    "sap_rpt": {
+      "status": "completed",
+      "retained": true,
+      "evaluation": {
+        "split_fingerprint": "sha256:...",
+        "evaluation_rows_fingerprint": "sha256:...",
+        "primary_metric": "macro_f1",
+        "score": 0.83
+      },
+      "evidence": {
+        "result_source": "shared_evaluation_rows",
+        "rows_scored": 320
+      },
+      "model": {
+        "name": "SAP RPT",
+        "version": "recorded model version",
+        "production_capable": true
+      },
+      "access": {
+        "route": "internal_managed_cli",
+        "client": "sap-rpt",
+        "customer_production_route": "sap_ai_core"
+      },
+      "context": {
+        "manifest": "backends/sap_rpt/context_manifest.json",
+        "fingerprint": "sha256:...",
+        "policy": "frozen labelled context reconstructed for inference"
+      },
+      "transfer_confirmation": {
+        "schema_validated": true,
+        "labels_validated": true,
+        "query_rows_excluded_from_context": true
+      }
+    }
+  },
+  "selection": {
+    "predictive_winner": "sap_rpt",
+    "operational_recommendation": "sap_rpt",
+    "rationale": "Highest macro F1 on the shared evaluation rows and acceptable operations.",
+    "primary_metric": "macro_f1"
+  },
+  "inference": {
+    "entrypoint": "infer.py",
+    "default_backend": "sap_rpt",
+    "input": {
+      "format": "csv",
+      "required_columns": ["fixed_acidity", "alcohol"],
+      "optional_columns": ["row_id"],
+      "dtypes": {
+        "fixed_acidity": "float64",
+        "alcohol": "float64",
+        "row_id": "string"
+      },
+      "missing_value_policy": {
+        "required": "reject missing columns; allow values handled by the saved backend",
+        "optional": "allow"
+      },
+      "extra_column_policy": "reject",
+      "target_column": "quality_class",
+      "identifier_columns": ["row_id"],
+      "feature_order": ["fixed_acidity", "alcohol"]
+    },
+    "output": {
+      "format": "csv",
+      "prediction_column": "prediction",
+      "probability_columns": ["probability"],
+      "row_id_column": "row_id",
+      "finite_values": true,
+      "probability_bounds": [0, 1]
+    },
+    "backends": {
+      "classical": "python infer.py --backend classical --input new.csv --output predictions.csv",
+      "autogluon": "python infer.py --backend autogluon --input new.csv --output predictions.csv",
+      "sap_rpt": "python infer.py --backend sap_rpt --input new.csv --output predictions.csv"
+    }
+  },
+  "lineage": {
+    "source_data_fingerprint": "sha256:...",
+    "parent_run_id": null,
+    "notes": []
   }
 }
 ```
 
-Do not fabricate a score to make a pending run look complete.
+Use real SHA-256 digests, not the abbreviated placeholders shown above.
 
-For `governance.risk_tier: "high"`, record the domain owner, meaningful human
-oversight, deployment decision, approval status, prohibited uses, critical
-harms, label provenance, external/prospective validation plan, appeal path,
-incident owner, monitoring cadence and rollback plan. New model runs may not
-leave risk classification unassessed. Every tier must include the assessment
-rationale and unresolved hazards; do not infer `standard` merely because the
-profiler was run with defaults.
+`approval.scope` must contain exactly `target`, `feature_contract`,
+`split_design`, and `primary_metric`, each set to true only after the user
+confirms the current values already stored in `problem` and `evaluation`. Do
+not duplicate those values inside `approval`.
 
-## Task-specific evaluation contracts
+`approval.tracks` must contain exactly `classical`, `autogluon`, and `sap_rpt`.
+For an approved track, use `selected: true`, `status: "approved"`, and a
+non-empty track-appropriate budget. For a declined track, use `selected:
+false`, `status: "declined"`, and `budget: null`.
 
-### Unlabeled anomaly ranking
+Every approved budget records positive `cpu_count`, `parallel_jobs`, and
+`memory_gb`, plus boolean `gpu_enabled`. Additionally require:
 
-Do not fabricate a holdout target or predictive score. Set
-`problem.labels_available: false`, define the reference/scoring windows and
-daily queue contract in `config.json`, and use:
+- classical: a non-empty unique `candidate_families` list,
+  `time_limit_seconds`, `optuna_trials`, and `minimum_family_coverage`;
+- AutoGluon: `preset`, `time_limit_seconds`, and `disk_gb`;
+- SAP RPT: `max_requests`, `max_context_rows`, `max_query_rows`,
+  `max_rows_per_request`, `max_retries`, and `timeout_seconds`.
+
+Make the classical ledger's family set equal
+`approval.tracks.classical.budget.candidate_families`. Make classical
+`search.trials_budget` equal the approved `optuna_trials`. Make AutoGluon
+`build.preset` and `build.time_limit_seconds` match its approved budget.
+
+Record one `backends` entry for every approved track, even when it failed or
+was unavailable. Create its backend directory when status is `completed` or
+`failed`; omit the directory when status is `unavailable`. Retain only
+completed usable backends. Do not create a backend entry or directory for a
+declined track.
+
+Every completed backend's evaluation must repeat the shared
+`split_fingerprint`, `evaluation_rows_fingerprint`, and primary metric so the
+validator can prove that the comparison uses the same evidence.
+
+## Backend artifacts
+
+### Classical
+
+Keep the complete fitted pipeline at a path under `backends/classical/`, for
+example:
+
+```text
+backends/classical/model.joblib
+```
+
+Include preprocessing, calibration, and post-processing in that fitted object.
+Record fold-local preprocessing, classical candidates, search method/budget,
+result, evidence, and artifact path in `run.json`. Use `search.method: "none"`
+with a reason when Optuna is unnecessary.
+
+### AutoGluon
+
+Keep the native predictor directory:
+
+```text
+backends/autogluon/predictor/
+```
+
+Record its preset, time limit, predictor path, result, and evidence. Require:
 
 ```json
 {
-  "schema_version": "2.1",
-  "task": "anomaly",
-  "primary_metric": null,
-  "anomaly_evaluation": {
-    "scoring_unit": "UTC day",
-    "review_capacity": 200,
-    "same_population_rank_stability": {
-      "spearman_mean": 0.91,
-      "top_k_overlap_mean": 0.82
-    },
-    "queue_concentration": {
-      "maximum_per_account": 3,
-      "largest_merchant_fraction": 0.08
-    },
-    "reviewed_precision_at_k": null,
-    "reviewed_rows": 0,
-    "unreviewed_rows_treated_as_negative": false
-  },
-  "final": {
-    "eval_set": "future_scoring_window",
-    "score": null,
-    "queue_size": 200,
-    "predictive_performance_available": false
-  }
+  "raw_tabular": true,
+  "external_preprocessing": false,
+  "external_optuna": false
 }
 ```
 
-The inference contract must distinguish row scoring from whole-batch queue
-selection and define timezone/cutoff, eligibility, sub-capacity behavior,
-stable tie-breaking, identifier passthrough, ranks, flags and reason codes.
+Do not copy a classical transformed matrix, Optuna study, or classical model.
 
-### Forecasting
+### SAP RPT
 
-Record forecast origin, issuance/retraining cadence, horizon, direct/recursive/
-multi-output strategy, historical covariate-vintage rule, target meaning
-(observed sales versus latent demand), quantiles, interval coverage semantics
-and cumulative lead-time outputs. Inference inputs must separate historical
-observations from future-known covariates and outputs must include entity,
-forecast date, horizon and quantile/point columns.
+Keep the context manifest needed to reconstruct or locate the frozen labelled
+inference context:
 
-## Data and inference contracts
+```text
+backends/sap_rpt/context_manifest.json
+```
 
-### data_fingerprint.json
+The manifest may reference a securely managed context source; if the context
+must travel with the run, keep it inside `backends/sap_rpt/` and reference it
+from the manifest. Record context fingerprint/policy, RPT model identity,
+access route, customer production route, transfer checks, result, and evidence
+in `run.json`.
 
-Record cryptographic file hashes, sizes, row/column counts, source commit when
-available, and generation timestamp. Hashes identify inputs; they do not
-anonymize them. For warehouse, lake or remote objects that cannot be
-content-hashed locally, record an immutable snapshot/version identifier and the
-exact bounded query. Do not claim reproducibility from a mutable URL.
-If the user explicitly accepts an unknown remote preflight, retain the recorded
-override and set `reproducibility_status: "limited_remote_source"`. Use the
-same status when the generic URL profiler records
-`version_verification: "declared_not_verified"`. Validation may warn, but the
-report must not present either run as exactly reproducible.
+Do not create an RPT model pickle, `train.py`, training/fit fields,
+hyperparameters, Optuna/search/trial fields, or copied artifacts from another
+backend. Never store credentials.
 
-### schema.json
+## Entry points
 
-Separate `observational_completeness` from the inference contract. Observing no
-missing values does not make a field semantically required. Record the profiled
-population, row/missing counts and status under that object. Populate
-`inference.required_inputs` and `inference.optional_inputs` only after the final
-pipeline is known, together with dtypes, semantic types, units, timezone,
-allowed missingness, target, partition column and compatibility behavior.
+### train.py
 
-### feature_manifest.json
+Use root `train.py` as the single rebuild entry point for retained build-based
+backends:
+
+```text
+python train.py --backend classical
+python train.py --backend autogluon
+python train.py --backend all
+```
+
+Keep classical and AutoGluon mechanics separate. AutoGluon receives raw
+eligible tabular data and owns its build. Do not expose an RPT training option.
+Omit `train.py` entirely from an RPT-only run.
+
+### infer.py
+
+Use one inference interface:
+
+```text
+python infer.py --input new.csv --output predictions.csv
+python infer.py --backend classical --input new.csv --output predictions.csv
+python infer.py --backend autogluon --input new.csv --output predictions.csv
+python infer.py --backend sap_rpt --input new.csv --output predictions.csv
+```
+
+Default to `inference.default_backend`. Support every retained backend and only
+retained backends. Validate input columns, dtypes, missingness, target
+exclusion, extra-column behavior, and output alignment.
+
+In `inference.input` record:
+
+- `format`;
+- disjoint `required_columns` and `optional_columns`;
+- a non-empty dtype for every declared input;
+- `missing_value_policy`;
+- `extra_column_policy`: `reject` or `ignore`;
+- `target_column`, which must not be an input;
+- `identifier_columns`;
+- `feature_order`, containing every non-identifier input exactly once.
+
+In `inference.output` record:
+
+- `format`;
+- one `prediction_column`;
+- zero or more distinct `probability_columns`;
+- `row_id_column`, or null when row IDs genuinely do not apply;
+- `finite_values: true`;
+- `probability_bounds: [0, 1]` when probability columns exist, otherwise null
+  or an empty list.
+
+Make `inference.default_backend` equal
+`selection.operational_recommendation`. Make `inference.backends` contain
+exactly one real root-`infer.py` command for every retained backend.
+
+For SAP RPT, load or reconstruct the frozen labelled context from
+`context_manifest.json`, package query rows, invoke the configured route,
+validate responses, and emit the shared task-level output contract. Fail
+actionably when access is unavailable.
+
+## Reports
+
+Make `report.html` self-contained with inline CSS, SVG, tables, and charts. Do
+not use JavaScript or external assets. Include:
+
+- problem, prediction moment, feature and evaluation contracts;
+- modeling-preflight findings;
+- approved and declined tracks with budgets, plus each approved backend's
+  completed/failed/unavailable status, score when completed, and reason when it
+  did not complete;
+- a baseline and classical candidate leaderboard section whenever classical
+  was approved, showing failures/unavailability when no score exists;
+- the AutoGluon preset/time/resource settings and result/status whenever
+  AutoGluon was approved;
+- SAP RPT context policy/coverage, model/access distinction, request failures,
+  latency/throughput, and result/status whenever SAP RPT was approved; label
+  unavailable or unmeasured dimensions explicitly;
+- same-row/same-fold comparison;
+- uncertainty, calibration/threshold behavior, errors, subgroup analysis, and
+  evidence limitations;
+- predictive winner and operational recommendation;
+- intended and prohibited uses, failure modes, monitoring/rebuild triggers, and
+  exact inference commands.
+
+Make `results.md` the concise text counterpart. It must include every approved
+backend's status/score, shared metric, predictive winner, operational
+recommendation, unified `infer.py` command, intended/prohibited uses,
+limitations, uncertainty, and monitoring. When applicable, it must also name
+the classical baseline/leaderboard, AutoGluon preset, and SAP RPT
+context/access/latency. Do not create a separate model card; include governance
+in the report, results, and `run.json.problem` as applicable.
+
+## Adding a backend to the same experiment
+
+When the user adds AutoGluon or SAP RPT later, keep it in the same run only if
+the source fingerprint, target, feature contract, split fingerprint,
+evaluation-row fingerprint, weights, and metric implementation are unchanged.
+
+Obtain approval, add only its `backends` entry and directory, update
+`inference.backends`, selection when justified, `lineage.notes`,
+`validation.json`, `report.html`, and `results.md`. Do not create an extension
+directory or copy any existing artifact.
+
+If already-opened final evidence influences backend selection, record that
+limitation in `lineage.notes` and require untouched future/external evidence
+for a new unbiased winner claim.
+
+## validation.json
 
 Record:
 
-- raw input features;
-- engineered features and formulas;
-- excluded identifiers/sensitive/post-event/target-source columns;
-- prediction-time availability;
-- preprocessing per feature;
-- expected category/unseen-category behavior.
-
-The target, partition field, identifiers used only for alignment, sensitive
-attributes excluded by policy and post-event/target-source fields must not
-silently appear in `raw_input_features`.
-
-### model/manifest.json
-
-For a multi-file model directory, list every relative component path and its
-SHA-256 hash. The validator must verify each component, not only hash the
-manifest itself.
-
-### requirements.lock and environment.lock
-
-Pin every package used by the deployable inference environment. Pin VCS
-dependencies to immutable commits and URL artifacts to content hashes; do not
-use floating include/constraint files as a lock.
-
-When using `environment.lock` instead, write structured JSON with
-`schema_version`, exact Python version, platform and an exact package
-name/version list. Arbitrary non-empty text is not an environment lock.
-
-### inference_test.json
-
-Record executable cases rather than only a claimed pass:
-
 ```json
 {
-  "schema_version": "2.1",
-  "trusted_model_sha256": "...",
-  "prediction_constraints": {
-    "probability": {
-      "semantic": "probability",
-      "minimum": 0.0,
-      "maximum": 1.0
-    }
-  },
-  "cases": [
+  "status": "passed",
+  "validated_at": "2026-07-29T12:30:00+08:00",
+  "inference_cases": [
     {
-      "name": "representative_batch",
+      "name": "sap-rpt-representative-new-rows",
+      "backend": "sap_rpt",
+      "kind": "representative",
       "argv": [
         "{python}",
-        "artefacts/runs/20260728T143000Z-lightgbm-initial/infer.py",
+        "infer.py",
+        "--backend",
+        "sap_rpt",
         "--input",
-        "test.csv",
+        "{input}",
         "--output",
-        "artefacts/runs/20260728T143000Z-lightgbm-initial/inference_outputs/test_predictions.csv"
+        "{output}"
       ],
-      "expected_exit_code": 0,
-      "output": {
-        "path": "artefacts/runs/20260728T143000Z-lightgbm-initial/inference_outputs/test_predictions.csv",
+      "input": {
         "format": "csv",
-        "row_count": 3,
-        "required_columns": ["invoice_id", "probability", "review_flag"],
-        "prediction_columns": ["probability"],
-        "row_id_column": "invoice_id",
-        "expected_row_ids": ["A", "B", "C"],
-        "golden_predictions": {"probability": [0.1, 0.8, 0.4]},
-        "absolute_tolerance": 1e-8
-      }
+        "columns": ["row_id", "fixed_acidity", "alcohol"],
+        "rows": [
+          {"row_id": "wine-1", "fixed_acidity": 7.1, "alcohol": 10.2},
+          {"row_id": "wine-2", "fixed_acidity": 6.8, "alcohol": 11.1}
+        ]
+      },
+      "expect": {
+        "exit_code": 0,
+        "output": {
+          "format": "csv",
+          "required_columns": ["row_id", "prediction", "probability"],
+          "min_rows": 2,
+          "max_rows": 2
+        }
+      },
+      "repeat_runs": 2
+    },
+    {
+      "name": "sap-rpt-single-row",
+      "backend": "sap_rpt",
+      "kind": "single_row",
+      "argv": [
+        "{python}",
+        "infer.py",
+        "--backend",
+        "sap_rpt",
+        "--input",
+        "{input}",
+        "--output",
+        "{output}"
+      ],
+      "input": {
+        "format": "csv",
+        "columns": ["row_id", "fixed_acidity", "alcohol"],
+        "rows": [
+          {"row_id": "wine-1", "fixed_acidity": 7.1, "alcohol": 10.2}
+        ]
+      },
+      "expect": {
+        "exit_code": 0,
+        "output": {
+          "format": "csv",
+          "required_columns": ["row_id", "prediction", "probability"],
+          "min_rows": 1,
+          "max_rows": 1
+        }
+      },
+      "repeat_runs": 2
+    },
+    {
+      "name": "sap-rpt-empty-input",
+      "backend": "sap_rpt",
+      "kind": "empty_input",
+      "argv": [
+        "{python}",
+        "infer.py",
+        "--backend",
+        "sap_rpt",
+        "--input",
+        "{input}",
+        "--output",
+        "{output}"
+      ],
+      "input": {
+        "format": "csv",
+        "columns": ["row_id", "fixed_acidity", "alcohol"],
+        "rows": []
+      },
+      "expect": {
+        "exit_code": 0,
+        "output": {
+          "format": "csv",
+          "required_columns": ["row_id", "prediction", "probability"],
+          "min_rows": 0,
+          "max_rows": 0
+        }
+      },
+      "repeat_runs": 1
+    },
+    {
+      "name": "sap-rpt-missing-required-column",
+      "backend": "sap_rpt",
+      "kind": "missing_required_column",
+      "argv": [
+        "{python}",
+        "infer.py",
+        "--backend",
+        "sap_rpt",
+        "--input",
+        "{input}",
+        "--output",
+        "{output}"
+      ],
+      "input": {
+        "format": "csv",
+        "columns": ["row_id", "fixed_acidity"],
+        "rows": [
+          {"row_id": "wine-1", "fixed_acidity": 7.1}
+        ]
+      },
+      "expect": {
+        "exit_code": 2,
+        "stderr_contains": "alcohol"
+      },
+      "repeat_runs": 1
     }
   ]
 }
 ```
 
-Include cases for a representative batch, one row, empty input, missing
-required fields, extra fields, wrong dtypes and unseen categories. Add
-all-missing optional fields when applicable. `representative_batch` and
-`one_row` must succeed with parsed outputs; `missing_required` and
-`wrong_dtypes` must fail with actionable messages. Other edge cases may either
-succeed with a verified output or use a controlled non-zero exit and actionable
-error substring. Use a SHA-256 output checksum instead of golden values only
-for byte-stable outputs. For a zero-row JSON success, use a schema-bearing
-object such as `{"columns": ["id", "score"], "rows": []}` rather than a bare
-array.
+Use inline inputs and `{input}`/`{output}` placeholders so the validator creates
+temporary files. For every retained backend, use unique case names and cover
+the four required `kind` values:
 
-When supervised decisions use fixed capacity, add separate successful cases for
-the exact names `score_rows`, `select_queue`, `capacity_ties`,
-`capacity_duplicates`, `capacity_empty` and `capacity_sub_capacity`. Queue-case
-outputs include `selection_rank` and `selected`, with their actual values in
-`golden_values`, plus `eligible_count`, `selected_count`, `capacity_limit`,
-timezone, cutoff and tie-breaker metadata. This verifies the executed queue,
-not merely a claimed success flag.
+- `representative`: at least two rows and `repeat_runs >= 2`;
+- `single_row`: exactly one row and `repeat_runs >= 2`;
+- `empty_input`: zero rows with a schema-bearing input and output;
+- `missing_required_column`: omit at least one required input and require a
+  non-zero exit plus an actionable stderr fragment.
 
-For schema 2.1 the validator runs the selected run's own `infer.py` with the
-current Python interpreter; it does not accept shell snippets or arbitrary
-executables. Every declared output must use the selected run's dedicated
-`inference_outputs/` directory; duplicate paths and artifact collisions are
-rejected. It completes static/hash validation first, replaces each declared
-test output, parses successful output, verifies row count, columns, order and
-finite predictions plus declared semantic bounds, then compares the checksum
-or golden values. A command that
-exits zero but emits no fresh predictions must fail. Execute only trusted local
-code.
+Each case must dispatch the declared backend with adjacent literal arguments
+`--backend <backend>`, use the global input/output format, and keep successful
+output row bounds equal to input rows. Successful expectations must include
+the prediction, probability, and row-ID columns declared in `run.json`.
 
-## Human-readable reports
+The executable check must preserve identifier order, emit finite prediction
+values, enforce `[0, 1]` probability bounds, and produce byte-identical outputs
+across repeated representative and single-row calls. Exercise optional-column
+omission and the declared extra-column policy in additional temporary checks
+when applicable. Remove all temporary inputs and outputs after execution.
 
-### data_summary.md
-
-Include:
-
-- dataset purpose and scope;
-- structural profile;
-- important charts and plain-language interpretation;
-- blockers/warnings/information;
-- reporting/sampling/holdout boundaries;
-- recommended next actions.
-
-### results.md
-
-Include:
-
-- business question, prediction moment and intended use;
-- cohort construction, label observation, sampling and weighting;
-- dataset/split summary linked to EDA;
-- leakage and data-quality decisions;
-- naive/fixed baselines, conditional incumbent comparison and signal diagnostics;
-- candidate roster, dependency outcomes, model-selection method and compute budget;
-- development and declared final/outer metrics with uncertainty;
-- threshold/calibration/forecast horizon/anomaly review budget;
-- subgroup/error analysis;
-- explainability with limitations;
-- production schema, inference command and trusted-artifact warning;
-- limitations, prohibited uses, monitoring and retraining guidance;
-- run/parent lineage, evaluation-exposure state and reproducibility footer.
-
-### model_card.md
-
-Summarize intended users, intended/out-of-scope uses, training data, evaluation,
-ethical/fairness limitations, operational constraints and ownership.
-
-## Validation
-
-Run the structural/semantic artifact checks and the real declared inference
-round trip:
+Run:
 
 ```text
 python scripts/validate_run.py <project-directory> \
-  --artifacts-dir artefacts/runs/<run_id> --run-inference-test
+  --artifacts-dir artefacts/runs/<run-id> --run-inference-test
 ```
 
-The validator verifies the declared artifact structure, cross-contract
-consistency, hashes and executable inference behavior. It does not prove that
-split construction, fold-local preprocessing, model selection or uncertainty
-estimation were scientifically correct. Reconcile the training code, logs,
-fold assignments and reports. Treat validator warnings as explicit handoff
-limitations; fix errors before completion.
-
-## Legacy compatibility
-
-Treat artifacts without `schema_version` as version 1:
-
-- accept legacy `final.eval_set == "holdout_test"`;
-- accept `ceiling_check` on read but write `search.plateau_detected`;
-- accept legacy `inference_trigger` but write
-  `problem.prediction_moment`;
-- accept existing filenames;
-- warn that v1 lacks the full data/schema/model-card contract.
-
-Accept v2.0 using its historical contract and warn that it lacks the v2.1 split
-manifest, run lineage, candidate ledger and executable case contract. Do not
-retroactively fail or rewrite a historical v2.0 run.
-
-Do not rewrite a historical artifact silently. Migrate into a new run directory
-or preserve a backup.
+The validator checks the exact root layout, approval/backend correspondence,
+shared evaluation fingerprints and metric, backend-specific semantics,
+self-contained report, pinned requirements, conditional `train.py`, and real
+inference outputs. It cannot prove scientific correctness; reconcile source
+code, folds, metrics, and reports before handoff.

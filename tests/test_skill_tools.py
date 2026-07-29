@@ -1,1235 +1,521 @@
 from __future__ import annotations
 
-import csv
-import hashlib
-import importlib.util
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
-REPOSITORY = Path(__file__).resolve().parents[1]
-PROFILE = REPOSITORY / "skills/ml-model-builder/scripts/profile_dataset.py"
-VALIDATE = REPOSITORY / "skills/ml-model-builder/scripts/validate_run.py"
-VALIDATOR_SPEC = importlib.util.spec_from_file_location("validate_run", VALIDATE)
-VALIDATOR = importlib.util.module_from_spec(VALIDATOR_SPEC)
-VALIDATOR_SPEC.loader.exec_module(VALIDATOR)
-PROFILER_SPEC = importlib.util.spec_from_file_location(
-    "profile_dataset_under_test",
-    PROFILE,
-)
-PROFILER = importlib.util.module_from_spec(PROFILER_SPEC)
-PROFILER_SPEC.loader.exec_module(PROFILER)
+import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = REPO_ROOT / "skills" / "ml-model-builder" / "scripts"
+INSPECT_SCRIPT = SCRIPTS / "inspect_model_data.py"
+REPORT_SCRIPT = SCRIPTS / "render_report.py"
 
 
-def write_csv(path: Path, rows: list[dict]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
+class ModelingPreflightTests(unittest.TestCase):
+    def run_inspection(
+        self, dataset: Path, *extra: str
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(INSPECT_SCRIPT),
+                str(dataset),
+                "--target",
+                "quality",
+                "--task",
+                "classification",
+                "--row-grain",
+                "one tested wine batch",
+                "--prediction-moment",
+                "after laboratory measurements are available",
+                *extra,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
-
-def run(*arguments: str) -> subprocess.CompletedProcess:
-    return run_from(REPOSITORY, *arguments)
-
-
-def run_from(cwd: Path, *arguments: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, *map(str, arguments)],
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-class ProfileDatasetTests(unittest.TestCase):
-    def rows(self) -> list[dict]:
-        values = []
-        for index in range(80):
-            values.append(
+    def test_preflight_prints_modeling_assessment_without_creating_artifacts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "wine.csv"
+            pd.DataFrame(
                 {
-                    "age": 20 + index % 40,
-                    "income": 30000 + index * 700,
-                    "segment": ["north", "south", "west"][index % 3],
-                    "email": f"person{index}@example.test",
-                    "event_time": f"2025-01-{index % 28 + 1:02d}",
-                    "churned": index % 2,
+                    "fixed_acidity": [7.0, 7.4, 7.8, 6.9, 7.2, 7.6],
+                    "volatile_acidity": [0.3, 0.5, 0.4, 0.2, 0.6, 0.35],
+                    "quality": [5, 6, 5, 7, 6, 7],
                 }
-            )
-        return values
+            ).to_csv(dataset, index=False)
+            before = sorted(path.name for path in root.iterdir())
 
-    def test_analysis_only_writes_labeled_deterministic_report(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "data.csv"
-            output = root / "artefacts"
-            write_csv(source, self.rows())
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--time-column",
-                "event_time",
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            for filename in [
-                "data_profile.json",
-                "data_report.html",
-                "data_summary.md",
-                "data_fingerprint.json",
-                "schema.json",
-                "config.json",
-            ]:
-                self.assertTrue((output / filename).is_file())
-            report = json.loads((output / "data_profile.json").read_text())
-            self.assertEqual(report["schema_version"], "2.1")
-            self.assertGreaterEqual(len(report["figures"]), 5)
-            schema = json.loads((output / "schema.json").read_text())
-            self.assertNotIn("required", schema["columns"]["age"])
+            result = self.run_inspection(dataset)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["problem"]["target"], "quality")
             self.assertEqual(
-                schema["inference"]["requiredness_status"],
-                "not_assessed",
+                payload["problem"]["prediction_moment"],
+                "after laboratory measurements are available",
             )
-            report_html = (output / "data_report.html").read_text()
-            self.assertIn("observed labels", report_html)
-            validated = run(VALIDATE, root)
-            self.assertEqual(validated.returncode, 0, validated.stdout)
-
-    def test_model_mode_requires_persisted_partition(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "data.csv"
-            write_csv(source, self.rows())
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                root / "artefacts",
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--split-strategy",
-                "stratified_random",
-                "--engine",
-                "duckdb",
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("persisted partition", completed.stderr)
-
-    def test_model_mode_requires_explicit_split_strategy(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = self.rows()
-            for index, row in enumerate(rows):
-                row["_ml_partition"] = "train" if index < 60 else "holdout"
-            source = root / "data.csv"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                root / "artefacts",
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("--split-strategy", completed.stderr)
-
-    def test_model_mode_uses_versioned_run_paths_in_config(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = self.rows()
-            for index, row in enumerate(rows):
-                row["_ml_partition"] = "train" if index < 60 else "holdout"
-            source = root / "data.csv"
-            output = root / "artefacts/runs/test-run"
-            write_csv(source, rows)
-            completed = run_from(
-                root,
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--time-column",
-                "event_time",
-                "--split-strategy",
-                "stratified_random",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            config = json.loads((output / "config.json").read_text())
-            prefix = "artefacts/runs/test-run"
+            self.assertTrue(payload["source"]["fingerprint"].startswith("sha256:"))
             self.assertEqual(
-                config["data"]["fingerprint_file"],
-                f"{prefix}/data_fingerprint.json",
+                sorted(path.name for path in root.iterdir()),
+                before,
+                "Modeling preflight must not create EDA or run artifacts",
             )
-            self.assertEqual(
-                config["data"]["split_manifest"],
-                f"{prefix}/split_manifest.json",
-            )
-            self.assertEqual(
-                config["analysis"]["report"],
-                f"{prefix}/data_report.html",
-            )
-            split_manifest = json.loads((output / "split_manifest.json").read_text())
-            self.assertFalse(split_manifest["audits"]["temporal_order"]["checked"])
+            serialized = json.dumps(payload).lower()
+            self.assertNotIn("chart", serialized)
+            self.assertNotIn("figure", serialized)
+            self.assertNotIn("html", serialized)
 
-    def test_profiler_does_not_silently_upgrade_existing_config(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "data.csv"
-            output = root / "artefacts"
-            output.mkdir()
-            write_csv(source, self.rows())
-            original = {"schema_version": "2.0", "mode": "analysis-only"}
-            (output / "config.json").write_text(json.dumps(original))
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--engine",
-                "pandas",
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("migrate", completed.stderr.lower())
-            self.assertEqual(
-                json.loads((output / "config.json").read_text()),
-                original,
-            )
+    def test_preflight_blocks_a_direct_target_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "leaky.csv"
+            pd.DataFrame(
+                {
+                    "feature": [10, 20, 30, 40],
+                    "quality_copy": [5, 6, 5, 6],
+                    "quality": [5, 6, 5, 6],
+                }
+            ).to_csv(dataset, index=False)
 
-    def test_profiler_refuses_to_relabel_an_existing_source(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            first = root / "first.csv"
-            second = root / "second.csv"
-            output = root / "artefacts"
-            write_csv(first, self.rows())
-            write_csv(second, self.rows()[:40])
-            initial = run(
-                PROFILE,
-                "--input",
-                first,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(initial.returncode, 0, initial.stderr)
-            repeated = run(
-                PROFILE,
-                "--input",
-                second,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--engine",
-                "pandas",
-            )
-            self.assertNotEqual(repeated.returncode, 0)
-            self.assertIn("new output/run directory", repeated.stderr)
+            result = self.run_inspection(dataset)
 
-    def test_profiler_refuses_changed_contents_at_the_same_path(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "data.csv"
-            output = root / "artefacts"
-            write_csv(source, self.rows()[:25])
-            initial = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(initial.returncode, 0, initial.stderr)
-            write_csv(source, self.rows()[:35])
-            repeated = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--engine",
-                "pandas",
-            )
-            self.assertNotEqual(repeated.returncode, 0)
-            self.assertIn("contents changed", repeated.stderr.lower())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["modeling_preflight"]["status"], "blocked")
+            codes = {
+                finding["code"] for finding in payload["modeling_preflight"]["findings"]
+            }
+            self.assertIn("direct_target_copy", codes)
 
-    def test_profiler_refuses_to_overwrite_a_manifested_run(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "data.csv"
-            output = root / "artefacts/runs/test-run"
-            write_csv(source, self.rows())
-            initial = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(initial.returncode, 0, initial.stderr)
-            (output / "run_manifest.json").write_text("{}", encoding="utf-8")
-            repeated = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--engine",
-                "pandas",
-            )
-            self.assertNotEqual(repeated.returncode, 0)
-            self.assertIn("immutable", repeated.stderr.lower())
+    def test_preflight_rejects_unknown_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "data.csv"
+            pd.DataFrame({"feature": [1, 2, 3]}).to_csv(dataset, index=False)
 
-    def test_profiler_can_prepare_an_improvement_run(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = self.rows()
-            for index, row in enumerate(rows):
-                row["_ml_partition"] = "train" if index < 60 else "holdout"
-            source = root / "data.csv"
-            output = root / "artefacts/runs/improvement"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--run-kind",
-                "improvement",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--split-strategy",
-                "stratified_random",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            config = json.loads((output / "config.json").read_text())
-            self.assertEqual(config["mode"], "model-improvement")
+            result = self.run_inspection(dataset)
 
-    def test_target_profile_uses_training_rows_only(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = self.rows()
-            for index, row in enumerate(rows):
-                row["_ml_partition"] = "train" if index < 60 else "holdout"
-                if index >= 60:
-                    row["churned"] = "HOLDOUT_SECRET"
-                    row["segment"] = "holdout_only"
-            source = root / "data.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--split-strategy",
-                "stratified_random",
-                "--engine",
-                "duckdb",
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            report = json.loads((output / "data_profile.json").read_text())
-            self.assertEqual(report["analysis_population"]["rows"], 80)
-            self.assertEqual(report["target_aware_population"]["rows"], 60)
-            self.assertFalse(report["columns"]["churned"]["values_inspected"])
-            self.assertEqual(report["columns"]["segment"]["unique_count"], 4)
-            self.assertEqual(report["target_summary"]["class_count"], 2)
-            self.assertNotIn(
-                "HOLDOUT_SECRET", (output / "data_report.html").read_text()
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("Target column not found", result.stderr)
+
+    def test_missing_runtime_dependencies_fail_cleanly_without_installing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "data.csv"
+            dataset.write_text("feature,quality\n1,0\n2,1\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, "-S", str(INSPECT_SCRIPT), str(dataset)],
+                check=False,
+                capture_output=True,
+                text=True,
             )
 
-    def test_model_mode_writes_group_overlap_split_audit(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = self.rows()
-            for index, row in enumerate(rows):
-                row["account_id"] = f"account-{index // 2}"
-                row["_ml_partition"] = "train" if index < 61 else "holdout"
-            source = root / "data.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--group-column",
-                "account_id",
-                "--split-strategy",
-                "grouped",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(completed.returncode, 2, completed.stderr)
-            manifest = json.loads((output / "split_manifest.json").read_text())
-            audit = manifest["audits"]["group_overlap"]
-            self.assertTrue(audit["checked"])
-            self.assertEqual(audit["groups_spanning_partitions"], 1)
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stdout, "")
+            self.assertNotIn("Traceback", result.stderr)
             self.assertIn(
-                "groups_span_partitions",
-                {finding["code"] for finding in manifest["blockers"]},
+                "interpreter where pandas and numpy already exist", result.stderr
             )
-            self.assertFalse(manifest["provenance"]["sealed_target_values_inspected"])
+            self.assertIn("do not install dependencies", result.stderr)
 
-    def test_remote_preflight_fails_before_network_access(self):
-        with tempfile.TemporaryDirectory() as directory:
-            completed = run(
-                PROFILE,
-                "--input",
-                "https://example.invalid/large.csv",
-                "--output-dir",
-                Path(directory) / "artefacts",
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("failed closed before scanning", completed.stderr)
-            self.assertIn("--expected-source-bytes", completed.stderr)
-            self.assertIn("--remote-source-version", completed.stderr)
+    def test_unique_continuous_measure_is_not_excluded_as_an_identifier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "continuous.csv"
+            pd.DataFrame(
+                {
+                    "fixed_acidity": [
+                        6.0 + index * 0.137 + (index % 3) * 0.011 for index in range(24)
+                    ],
+                    "quality": [5, 6] * 12,
+                }
+            ).to_csv(dataset, index=False)
 
-    def test_declared_remote_version_is_not_claimed_as_verified(self):
-        args = SimpleNamespace(
-            input="https://example.test/data.parquet",
-            expected_source_bytes=1000,
-            expected_source_rows=100,
-            remote_source_version="declared-etag",
-            allow_unknown_remote_preflight=False,
-        )
-        preflight = PROFILER.remote_preflight(args)
-        source = PROFILER.remote_source_contract(args, preflight)
-        self.assertEqual(source["version_verification"], "declared_not_verified")
-        self.assertEqual(
-            source["reproducibility_status"],
-            "limited_remote_source",
-        )
+            result = self.run_inspection(dataset)
 
-    def test_panel_time_series_reports_bounded_series_coverage(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = []
-            for store in range(15):
-                for day in range(4):
-                    rows.append(
-                        {
-                            "store_id": f"store-{store}",
-                            "date": f"2025-01-{day + 1:02d}",
-                            "demand": store + day,
-                        }
-                    )
-            source = root / "panel.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--task",
-                "time-series",
-                "--target",
-                "demand",
-                "--time-column",
-                "date",
-                "--group-column",
-                "store_id",
-                "--max-panel-series",
-                "5",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            report = json.loads((output / "data_profile.json").read_text())
-            coverage = report["panel_coverage"]
-            self.assertEqual(coverage["series_count"], 15)
-            self.assertEqual(len(coverage["representative_series"]), 5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            contract = payload["problem"]["feature_contract"]
+            self.assertIn("fixed_acidity", contract["included"])
+            self.assertNotIn("fixed_acidity", contract["auto_excluded_identifiers"])
 
-    def test_model_panel_coverage_includes_holdout_only_series(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = []
-            for store in range(3):
-                for day in range(4):
-                    rows.append(
-                        {
-                            "store_id": f"store-{store}",
-                            "date": f"2025-01-{day + 1:02d}",
-                            "demand": store + day,
-                            "_ml_partition": "holdout" if store == 2 else "train",
-                        }
-                    )
-            source = root / "panel.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "time-series",
-                "--target",
-                "demand",
-                "--time-column",
-                "date",
-                "--group-column",
-                "store_id",
-                "--split-strategy",
-                "grouped",
-                "--max-panel-series",
-                "5",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            report = json.loads((output / "data_profile.json").read_text())
-            self.assertEqual(report["panel_coverage"]["series_count"], 3)
-            self.assertEqual(report["analysis_population"]["rows"], 12)
-            self.assertEqual(report["target_aware_population"]["rows"], 8)
-
-    def test_known_series_temporal_policy_allows_declared_group_overlap(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = []
-            for store in range(3):
-                for day in range(4):
-                    rows.append(
-                        {
-                            "store_id": f"store-{store}",
-                            "date": f"2025-01-{day + 1:02d}",
-                            "demand": store + day,
-                            "_ml_partition": "train" if day < 2 else "holdout",
-                        }
-                    )
-            source = root / "panel.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "time-series",
-                "--target",
-                "demand",
-                "--time-column",
-                "date",
-                "--group-column",
-                "store_id",
-                "--split-strategy",
-                "grouped_temporal",
-                "--group-overlap-policy",
-                "known_series_temporal",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            manifest = json.loads((output / "split_manifest.json").read_text())
-            self.assertTrue(manifest["audits"]["group_overlap"]["allowed"])
-            self.assertEqual(
-                manifest["audits"]["group_overlap"]["groups_spanning_partitions"],
-                3,
-            )
-            self.assertTrue(manifest["audits"]["temporal_order"]["valid"])
-
-    def test_known_entity_temporal_policy_allows_future_event_classification(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = []
-            for account in range(3):
-                for day in range(4):
-                    rows.append(
-                        {
-                            "account_id": f"account-{account}",
-                            "date": f"2025-01-{day + 1:02d}",
-                            "feature": account + day,
-                            "outcome": day % 2,
-                            "_ml_partition": "train" if day < 2 else "holdout",
-                        }
-                    )
-            source = root / "events.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "outcome",
-                "--time-column",
-                "date",
-                "--group-column",
-                "account_id",
-                "--split-strategy",
-                "temporal",
-                "--group-overlap-policy",
-                "known_entity_temporal",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            manifest = json.loads((output / "split_manifest.json").read_text())
-            self.assertTrue(manifest["audits"]["group_overlap"]["allowed"])
-            self.assertTrue(manifest["audits"]["temporal_order"]["valid"])
-
-    def test_temporal_split_blocks_missing_timestamps(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = self.rows()
-            for index, row in enumerate(rows):
-                row["_ml_partition"] = "train" if index < 60 else "holdout"
-            rows[0]["event_time"] = ""
-            source = root / "data.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--time-column",
-                "event_time",
-                "--split-strategy",
-                "temporal",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(completed.returncode, 2, completed.stderr)
-            manifest = json.loads((output / "split_manifest.json").read_text())
-            self.assertFalse(manifest["audits"]["temporal_order"]["valid"])
-
-    def test_grouped_split_blocks_missing_group_ids(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = self.rows()
-            for index, row in enumerate(rows):
-                row["account_id"] = "" if index == 0 else f"account-{index // 2}"
-                row["_ml_partition"] = "train" if index < 60 else "holdout"
-            source = root / "data.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--group-column",
-                "account_id",
-                "--split-strategy",
-                "grouped",
-                "--engine",
-                "pandas",
-            )
-            self.assertEqual(completed.returncode, 2, completed.stderr)
-            manifest = json.loads((output / "split_manifest.json").read_text())
-            self.assertIn(
-                "missing_split_group",
-                {item["code"] for item in manifest["blockers"]},
-            )
-
-    def test_single_class_training_target_is_a_blocker(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = self.rows()
-            for row in rows:
-                row["_ml_partition"] = "train"
-                row["churned"] = 1
-            source = root / "data.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--split-strategy",
-                "stratified_random",
-            )
-            self.assertEqual(completed.returncode, 2, completed.stderr)
-            report = json.loads((output / "data_profile.json").read_text())
-            self.assertIn(
-                "single_class_target",
-                {finding["code"] for finding in report["findings"]},
-            )
-
-    def test_nested_cv_global_profile_is_target_blind(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rows = []
-            for index in range(2_000):
-                rows.append(
-                    {
-                        "feature": index,
-                        "target": 1 if index == 1_999 else 0,
-                        "_ml_partition": "train",
-                    }
+    def test_preflight_finds_duplicates_and_group_leakage_hidden_by_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "wine_pipeline.csv"
+            rows = [
+                {
+                    "sample_id": f"wine-{fold}-{quality}-{replicate}",
+                    "fold": fold,
+                    "duplicate_group": f"quality-{quality}",
+                    "fixed_acidity": acidity,
+                    "volatile_acidity": volatile,
+                    "quality": quality,
+                }
+                for fold in (0, 1)
+                for quality, acidity, volatile in (
+                    (5, 7.0, 0.30),
+                    (6, 7.0, 0.30),
                 )
-            source = root / "data.csv"
-            output = root / "artefacts"
-            write_csv(source, rows)
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "model",
-                "--task",
-                "classification",
-                "--target",
-                "target",
-                "--max-plot-rows",
-                "10",
-                "--engine",
-                "pandas",
-                "--evaluation-design",
-                "nested_cv",
-                "--split-strategy",
-                "stratified_random",
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            report = json.loads((output / "data_profile.json").read_text())
-            self.assertEqual(
-                report["target_summary"]["status"],
-                "not_generated",
-            )
-            self.assertFalse(report["target_summary"]["target_values_inspected"])
-            self.assertFalse(report["columns"]["target"]["values_inspected"])
-            self.assertTrue(report["nested_cv_global_profile_target_blind"])
-            self.assertFalse((output / "figures/target_distribution.png").exists())
-            config = json.loads((output / "config.json").read_text())
-            self.assertEqual(config["evaluation"]["design"], "nested_cv")
-            self.assertEqual(config["evaluation"]["final_eval_set"], "outer_cv")
-            self.assertFalse(config["split"]["holdout_target_sealed"])
+                for replicate in (0, 1)
+            ]
+            pd.DataFrame(rows).to_csv(dataset, index=False)
 
-    def test_auto_routes_beyond_memory_input_to_duckdb(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "data.csv"
-            output = root / "artefacts"
-            write_csv(source, self.rows())
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                output,
-                "--mode",
-                "analysis-only",
-                "--task",
-                "classification",
-                "--target",
-                "churned",
-                "--max-in-memory-bytes",
-                "1",
+            result = self.run_inspection(dataset, "--group-column", "duplicate_group")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            duplicates = payload["dataset"]["duplicates"]
+            self.assertEqual(duplicates["exact_rows"], 0)
+            self.assertGreater(duplicates["substantive_rows"], 0)
+            self.assertIn("sample_id", duplicates["excluded_comparison_columns"])
+            self.assertIn("fold", duplicates["excluded_comparison_columns"])
+            self.assertIn("duplicate_group", duplicates["excluded_comparison_columns"])
+
+            contract = payload["problem"]["feature_contract"]
+            self.assertEqual(
+                contract["included"], ["fixed_acidity", "volatile_acidity"]
+            )
+            self.assertIn("sample_id", contract["auto_excluded_identifiers"])
+            self.assertIn("fold", contract["auto_excluded_pipeline_metadata"])
+
+            group = payload["split_context"]["group"]
+            self.assertTrue(group["target_is_function_of_group"])
+            self.assertGreater(group["identical_feature_signatures_across_groups"], 0)
+            self.assertGreater(group["conflicting_label_signatures_across_groups"], 0)
+
+            fold_audit = payload["split_context"]["fold_metadata"]
+            self.assertEqual(len(fold_audit), 1)
+            self.assertEqual(
+                {partition["classes"] for partition in fold_audit[0]["partitions"]},
+                {2},
             )
             self.assertEqual(
-                completed.returncode,
+                {partition["rows"] for partition in fold_audit[0]["partitions"]},
+                {4},
+            )
+            self.assertGreater(
+                fold_audit[0]["group_overlap"]["duplicate_group"][
+                    "groups_crossing_partitions"
+                ],
                 0,
-                completed.stdout + completed.stderr,
             )
-            report = json.loads((output / "data_profile.json").read_text())
-            self.assertEqual(report["engine"], "duckdb")
-            self.assertEqual(report["analysis_population"]["rows"], 80)
-            self.assertIn("Routing EDA to DuckDB", completed.stdout)
 
-    def test_duckdb_fails_closed_when_working_disk_is_too_small(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "data.csv"
-            write_csv(source, self.rows())
-            completed = run(
-                PROFILE,
-                "--input",
-                source,
-                "--output-dir",
-                root / "artefacts",
-                "--engine",
-                "duckdb",
-                "--expected-source-bytes",
-                str(10**18),
-            )
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn(
-                "below the conservative",
-                completed.stderr,
+            self.assertEqual(payload["modeling_preflight"]["status"], "blocked")
+            codes = {
+                finding["code"] for finding in payload["modeling_preflight"]["findings"]
+            }
+            self.assertTrue(
+                {
+                    "pipeline_metadata_excluded",
+                    "substantive_duplicate_observations",
+                    "conflicting_labels_for_identical_features",
+                    "feature_signatures_cross_groups",
+                    "conflicting_labels_cross_groups",
+                    "target_dependent_group_assignment",
+                    "group_ids_cross_folds",
+                }.issubset(codes)
             )
 
 
-class ValidateRunTests(unittest.TestCase):
-    def test_metric_contract_rejects_non_numeric_score(self):
-        errors = []
-        VALIDATOR.validate_metric_contract(
-            {
-                "primary_metric": {
-                    "name": "average_precision",
-                    "direction": "maximize",
+def representative_run() -> dict:
+    data_fingerprint = "sha256:" + "a" * 64
+    split_fingerprint = "sha256:" + "b" * 64
+    evaluation_rows_fingerprint = "sha256:" + "c" * 64
+    return {
+        "run_id": "wine-quality-comparison",
+        "created_at": "2026-07-29T10:00:00+00:00",
+        "problem": {
+            "task": "classification",
+            "target": "quality",
+            "prediction_moment": "after laboratory measurements",
+            "row_grain": "one wine batch",
+            "intended_use": "offline wine-quality classification",
+            "prohibited_uses": ["automated safety or pricing decisions"],
+            "feature_contract": {
+                "included": ["fixed_acidity", "volatile_acidity"],
+                "excluded": ["sample_id"],
+            },
+        },
+        "data": {
+            "source": "wine.csv",
+            "fingerprint": data_fingerprint,
+            "row_count": 1599,
+        },
+        "modeling_preflight": {
+            "status": "passed",
+            "target_validated": True,
+            "row_grain_validated": True,
+            "prediction_moment_validated": True,
+            "leakage_reviewed": True,
+            "feature_availability_reviewed": True,
+            "split_suitable": True,
+            "findings": ["Feature availability was confirmed with the user."],
+        },
+        "evaluation": {
+            "design": "stratified holdout",
+            "split_fingerprint": split_fingerprint,
+            "evaluation_rows_fingerprint": evaluation_rows_fingerprint,
+            "primary_metric": {"name": "macro_f1", "direction": "maximize"},
+            "uncertainty": {"method": "group bootstrap", "confidence": 0.95},
+        },
+        "approval": {
+            "approved_at": "2026-07-29T10:02:00+00:00",
+            "scope": {
+                "target": True,
+                "feature_contract": True,
+                "split_design": True,
+                "primary_metric": True,
+            },
+            "tracks": {
+                "classical": {
+                    "selected": True,
+                    "status": "approved",
+                    "budget": {
+                        "cpu_count": 4,
+                        "parallel_jobs": 1,
+                        "memory_gb": 8,
+                        "gpu_enabled": False,
+                        "candidate_families": ["tree_ensemble"],
+                        "time_limit_seconds": 900,
+                        "optuna_trials": 30,
+                        "minimum_family_coverage": 1,
+                    },
                 },
-                "final": {
-                    "metric": "average_precision",
-                    "score": "excellent",
-                    "confidence_interval": [0.5, 0.8],
+                "autogluon": {
+                    "selected": True,
+                    "status": "approved",
+                    "budget": {
+                        "cpu_count": 4,
+                        "parallel_jobs": 1,
+                        "memory_gb": 8,
+                        "gpu_enabled": False,
+                        "preset": "medium_quality",
+                        "time_limit_seconds": 900,
+                        "disk_gb": 10,
+                    },
+                },
+                "sap_rpt": {
+                    "selected": True,
+                    "status": "approved",
+                    "budget": {
+                        "cpu_count": 2,
+                        "parallel_jobs": 1,
+                        "memory_gb": 4,
+                        "gpu_enabled": False,
+                        "max_requests": 20,
+                        "max_context_rows": 1000,
+                        "max_query_rows": 200,
+                        "max_rows_per_request": 100,
+                        "max_retries": 2,
+                        "timeout_seconds": 120,
+                    },
                 },
             },
-            errors,
-        )
-        self.assertIn(
-            "metrics.json: final.score must be a finite number",
-            errors,
-        )
-
-    def test_high_stakes_contract_requires_oversight_and_approval_fields(self):
-        errors = []
-        VALIDATOR.validate_high_stakes(
-            {
-                "governance": {
-                    "risk_tier": "high",
-                    "deployment_decision": "autonomous",
-                }
+        },
+        "backends": {
+            "classical": {
+                "status": "completed",
+                "retained": True,
+                "preprocessing": {"scope": "fold_local"},
+                "search": {
+                    "method": "optuna",
+                    "trials_budget": 30,
+                    "trials_completed": 30,
+                },
+                "candidates": [
+                    {
+                        "name": "random_forest",
+                        "family": "tree_ensemble",
+                        "status": "completed",
+                        "score": 0.64,
+                        "consideration_basis": "nonlinear tabular baseline",
+                    }
+                ],
+                "evaluation": {
+                    "split_fingerprint": split_fingerprint,
+                    "evaluation_rows_fingerprint": evaluation_rows_fingerprint,
+                    "primary_metric": "macro_f1",
+                    "score": 0.64,
+                },
+                "evidence": {"best_candidate": "random_forest"},
+                "artifacts": {"model": "backends/classical/model.joblib"},
             },
-            errors,
-        )
-        self.assertTrue(any("domain_owner" in error for error in errors))
-        self.assertTrue(any("human_oversight" in error for error in errors))
-        self.assertTrue(any("recorded approval" in error for error in errors))
+            "autogluon": {
+                "status": "completed",
+                "retained": True,
+                "build": {
+                    "preset": "medium_quality",
+                    "time_limit_seconds": 900,
+                    "predictor_path": "backends/autogluon/predictor",
+                },
+                "data_handling": {
+                    "raw_tabular": True,
+                    "external_preprocessing": False,
+                    "external_optuna": False,
+                },
+                "evaluation": {
+                    "split_fingerprint": split_fingerprint,
+                    "evaluation_rows_fingerprint": evaluation_rows_fingerprint,
+                    "primary_metric": "macro_f1",
+                    "score": 0.67,
+                },
+                "evidence": {"leaderboard": "native summary retained"},
+            },
+            "sap_rpt": {
+                "status": "completed",
+                "retained": True,
+                "model": {
+                    "name": "sap-rpt",
+                    "version": "production",
+                    "production_capable": True,
+                },
+                "access": {
+                    "route": "internal_cli",
+                    "client": "sap-rpt",
+                    "customer_production_route": "sap_ai_core",
+                },
+                "context": {
+                    "manifest": "backends/sap_rpt/context.json",
+                    "fingerprint": "sha256:context",
+                    "policy": "train rows only",
+                },
+                "transfer_confirmation": {
+                    "schema_validated": True,
+                    "labels_validated": True,
+                    "query_rows_excluded_from_context": True,
+                },
+                "evaluation": {
+                    "split_fingerprint": split_fingerprint,
+                    "evaluation_rows_fingerprint": evaluation_rows_fingerprint,
+                    "primary_metric": "macro_f1",
+                    "score": 0.69,
+                },
+                "evidence": {
+                    "request_ids_retained": True,
+                    "latency_ms": 420,
+                },
+            },
+        },
+        "selection": {
+            "predictive_winner": "sap_rpt",
+            "operational_recommendation": "sap_rpt",
+            "rationale": "Highest macro F1 on the shared evaluation rows.",
+            "primary_metric": "macro_f1",
+            "limitations": ["The minority class is relatively small."],
+            "monitoring": {"metric": "macro_f1", "cadence": "monthly"},
+        },
+        "inference": {
+            "entrypoint": "infer.py",
+            "default_backend": "sap_rpt",
+            "input": {
+                "format": "csv",
+                "required_columns": [
+                    "row_id",
+                    "fixed_acidity",
+                    "volatile_acidity",
+                ],
+                "optional_columns": [],
+                "dtypes": {
+                    "row_id": "string",
+                    "fixed_acidity": "float",
+                    "volatile_acidity": "float",
+                },
+                "missing_value_policy": "reject missing required values",
+                "extra_column_policy": "reject",
+                "target_column": "quality",
+                "identifier_columns": ["row_id"],
+                "feature_order": ["fixed_acidity", "volatile_acidity"],
+            },
+            "output": {
+                "format": "csv",
+                "prediction_column": "prediction",
+                "probability_columns": [],
+                "probability_bounds": None,
+                "row_id_column": "row_id",
+                "finite_values": True,
+            },
+            "backends": {
+                "classical": "python infer.py --backend classical --input new.csv --output predictions.csv",
+                "autogluon": "python infer.py --backend autogluon --input new.csv --output predictions.csv",
+                "sap_rpt": "python infer.py --backend sap_rpt --input new.csv --output predictions.csv",
+            },
+        },
+        "lineage": {
+            "source_data_fingerprint": data_fingerprint,
+            "parent_run_id": None,
+            "notes": ["All backends used identical evaluation rows."],
+        },
+    }
 
-    def test_zero_row_json_requires_schema_envelope(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            envelope = root / "envelope.json"
-            envelope.write_text(
-                json.dumps({"columns": ["row_id", "score"], "rows": []})
-            )
-            errors = []
-            columns, rows = VALIDATOR.read_inference_output(
-                envelope,
-                {"format": "json"},
-                "case",
-                errors,
-            )
-            self.assertEqual(errors, [])
-            self.assertEqual(columns, ["row_id", "score"])
-            self.assertEqual(rows, [])
 
-            bare = root / "bare.json"
-            bare.write_text("[]")
-            errors = []
-            columns, rows = VALIDATOR.read_inference_output(
-                bare,
-                {"format": "json"},
-                "case",
-                errors,
+class ConsolidatedReportTests(unittest.TestCase):
+    def test_report_is_one_self_contained_backend_inclusive_html_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "run.json").write_text(
+                json.dumps(representative_run()), encoding="utf-8"
             )
-            self.assertIsNone(columns)
-            self.assertIsNone(rows)
-            self.assertTrue(any("schema-bearing" in error for error in errors))
+            (root / "results.md").write_text(
+                "# Findings\n\n- SAP RPT achieved the highest macro F1.\n"
+                "- AutoGluon ranked second.\n\n## Limitations\n\nSmall minority classes.",
+                encoding="utf-8",
+            )
 
-    def test_valid_analysis_only_artifacts_pass(self):
-        with tempfile.TemporaryDirectory() as directory:
-            project = Path(directory)
-            artifacts = project / "artefacts"
-            (artifacts / "figures").mkdir(parents=True)
-            (artifacts / "figures/chart.png").write_bytes(b"png")
-            (artifacts / "config.json").write_text(
-                json.dumps({"schema_version": "2.0", "mode": "analysis-only"})
+            result = subprocess.run(
+                [sys.executable, str(REPORT_SCRIPT), str(root)],
+                check=False,
+                capture_output=True,
+                text=True,
             )
-            (artifacts / "data_profile.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": "2.0",
-                        "mode": "analysis-only",
-                    }
-                )
-            )
-            for filename in ["data_fingerprint.json", "schema.json"]:
-                (artifacts / filename).write_text(json.dumps({"schema_version": "2.0"}))
-            (artifacts / "data_report.html").write_text("<html></html>")
-            (artifacts / "data_summary.md").write_text("# Summary")
-            completed = run(VALIDATE, project)
-            self.assertEqual(completed.returncode, 0, completed.stdout)
 
-    def test_incomplete_model_artifacts_fail(self):
-        with tempfile.TemporaryDirectory() as directory:
-            project = Path(directory)
-            artifacts = project / "artefacts"
-            artifacts.mkdir()
-            (artifacts / "config.json").write_text(
-                json.dumps({"schema_version": "2.0", "mode": "model-building"})
-            )
-            completed = run(VALIDATE, project)
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("missing artefacts/model.joblib", completed.stdout)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = root / "report.html"
+            self.assertTrue(report.is_file())
+            text = report.read_text(encoding="utf-8")
+            lower = text.lower()
+            self.assertIn("<!doctype html>", lower)
+            self.assertIn("<style>", lower)
+            self.assertIn("<svg", lower)
+            self.assertIn("classical", lower)
+            self.assertIn("autogluon", lower)
+            self.assertIn("sap_rpt", lower)
+            self.assertIn("predictive winner", lower)
+            self.assertIn("inference", lower)
+            self.assertIn("0.69", lower)
+            self.assertIn("feature contract", lower)
+            self.assertIn("confirmed", lower)
+            self.assertIn("classical baselines and leaderboard", lower)
+            self.assertIn("autogluon settings", lower)
+            self.assertIn("medium_quality", lower)
+            self.assertIn("sap rpt context, access, and latency", lower)
+            self.assertIn("uncertainty and limitations", lower)
+            self.assertIn("intended use, prohibited use, and monitoring", lower)
+            self.assertNotIn("<link", lower)
+            self.assertNotIn("<script", lower)
+            self.assertNotIn("<img", lower)
+            self.assertNotIn('src="', lower)
+            self.assertNotIn('href="http', lower)
+            self.assertEqual(list(root.glob("*.html")), [report])
+            self.assertFalse((root / "figures").exists())
 
-    def test_complete_model_contract_and_inference_round_trip_pass(self):
-        with tempfile.TemporaryDirectory() as directory:
-            project = Path(directory)
-            artifacts = project / "artefacts"
-            (artifacts / "figures").mkdir(parents=True)
-            (artifacts / "figures/chart.png").write_bytes(b"png")
-            model_bytes = b"trusted-test-model-placeholder"
-            (artifacts / "model.joblib").write_bytes(model_bytes)
-            model_hash = hashlib.sha256(model_bytes).hexdigest()
-            documents = {
-                "config.json": {
-                    "schema_version": "2.0",
-                    "mode": "model-building",
-                    "problem": {
-                        "task": "classification",
-                        "prediction_moment": "application time",
-                    },
-                    "split": {
-                        "assignment_column": "_ml_partition",
-                        "development_label": "train",
-                        "holdout_target_sealed": True,
-                    },
-                    "analysis": {"target_aware_partition": "train"},
-                    "evaluation": {
-                        "design": "holdout",
-                        "final_eval_set": "holdout_test",
-                        "independent_test": True,
-                        "selection_nested": False,
-                    },
-                    "governance": {"risk_tier": "standard"},
-                },
-                "data_profile.json": {
-                    "schema_version": "2.0",
-                    "mode": "model",
-                },
-                "data_fingerprint.json": {"schema_version": "2.0"},
-                "schema.json": {
-                    "schema_version": "2.0",
-                    "partition_column": "_ml_partition",
-                },
-                "feature_manifest.json": {
-                    "schema_version": "2.0",
-                    "raw_input_features": ["age"],
-                },
-                "metrics.json": {
-                    "schema_version": "2.0",
-                    "primary_metric": {
-                        "name": "average_precision",
-                        "direction": "maximize",
-                    },
-                    "final": {
-                        "eval_set": "holdout_test",
-                        "score": 0.7,
-                        "metric": "average_precision",
-                        "confidence_interval": [0.6, 0.8],
-                    },
-                },
-                "inference_test.json": {
-                    "command": "python artefacts/infer.py --input test.csv",
-                    "argv": ["{python}", "artefacts/infer.py"],
-                    "status": "passed",
-                    "row_count": 1,
-                    "trusted_model_sha256": model_hash,
-                },
-            }
-            for filename, document in documents.items():
-                (artifacts / filename).write_text(json.dumps(document))
-            for filename, contents in {
-                "data_report.html": "<html></html>",
-                "data_summary.md": "# Summary",
-                "train.py": "pass\n",
-                "infer.py": "pass\n",
-                "model_card.md": "# Model card",
-                "requirements.lock": "scikit-learn==1.7.1\n",
-            }.items():
-                (artifacts / filename).write_text(contents)
-            (project / "results.md").write_text(
-                "# Results\n\nPrediction moment: application time."
+    def test_report_renderer_requires_run_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [sys.executable, str(REPORT_SCRIPT), tmp],
+                check=False,
+                capture_output=True,
+                text=True,
             )
-            completed = run(VALIDATE, project, "--run-inference-test")
-            self.assertEqual(completed.returncode, 0, completed.stdout)
-
-    def test_unlabeled_anomaly_contract_does_not_require_fake_holdout_score(self):
-        with tempfile.TemporaryDirectory() as directory:
-            project = Path(directory)
-            artifacts = project / "artefacts"
-            (artifacts / "figures").mkdir(parents=True)
-            (artifacts / "figures/chart.png").write_bytes(b"png")
-            model_bytes = b"trusted-anomaly-scorer"
-            (artifacts / "model.joblib").write_bytes(model_bytes)
-            documents = {
-                "config.json": {
-                    "schema_version": "2.0",
-                    "mode": "model-building",
-                    "problem": {
-                        "task": "anomaly",
-                        "labels_available": False,
-                        "prediction_moment": "UTC daily cutoff",
-                    },
-                    "split": {"assignment_column": "_ml_partition"},
-                    "analysis": {"population_partition": "reference"},
-                    "governance": {"risk_tier": "standard"},
-                },
-                "data_profile.json": {
-                    "schema_version": "2.0",
-                    "mode": "model",
-                },
-                "data_fingerprint.json": {"schema_version": "2.0"},
-                "schema.json": {
-                    "schema_version": "2.0",
-                    "partition_column": "_ml_partition",
-                },
-                "feature_manifest.json": {
-                    "schema_version": "2.0",
-                    "raw_input_features": ["amount"],
-                },
-                "metrics.json": {
-                    "schema_version": "2.0",
-                    "final": {
-                        "eval_set": "future_scoring_window",
-                        "score": None,
-                        "predictive_performance_available": False,
-                    },
-                    "anomaly_evaluation": {
-                        "review_capacity": 200,
-                        "unreviewed_rows_treated_as_negative": False,
-                    },
-                },
-                "inference_test.json": {
-                    "command": "python artefacts/infer.py --input batch.csv",
-                    "argv": ["{python}", "artefacts/infer.py"],
-                    "status": "passed",
-                    "row_count": 250,
-                    "trusted_model_sha256": hashlib.sha256(model_bytes).hexdigest(),
-                },
-            }
-            for filename, document in documents.items():
-                (artifacts / filename).write_text(json.dumps(document))
-            for filename, contents in {
-                "data_report.html": "<html></html>",
-                "data_summary.md": "# Summary",
-                "train.py": "pass\n",
-                "infer.py": "pass\n",
-                "model_card.md": "# Model card",
-                "requirements.lock": "scikit-learn==1.7.1\n",
-            }.items():
-                (artifacts / filename).write_text(contents)
-            (project / "results.md").write_text(
-                "# Results\n\nPrediction moment: UTC daily cutoff."
-            )
-            completed = run(VALIDATE, project)
-            self.assertEqual(completed.returncode, 0, completed.stdout)
-
-    def test_nested_cv_contract_is_accepted_without_fake_holdout(self):
-        with tempfile.TemporaryDirectory() as directory:
-            project = Path(directory)
-            artifacts = project / "artefacts"
-            (artifacts / "figures").mkdir(parents=True)
-            (artifacts / "figures/chart.png").write_bytes(b"png")
-            model_bytes = b"nested-cv-model"
-            (artifacts / "model.joblib").write_bytes(model_bytes)
-            documents = {
-                "config.json": {
-                    "schema_version": "2.0",
-                    "mode": "model-building",
-                    "problem": {
-                        "task": "classification",
-                        "prediction_moment": "encounter start",
-                    },
-                    "split": {
-                        "assignment_column": "_outer_fold",
-                        "development_label": "development",
-                    },
-                    "analysis": {
-                        "target_aware_partition": "development",
-                    },
-                    "evaluation": {
-                        "design": "nested_cv",
-                        "final_eval_set": "outer_cv",
-                        "selection_nested": True,
-                        "independent_test": False,
-                    },
-                    "governance": {"risk_tier": "standard"},
-                },
-                "data_profile.json": {
-                    "schema_version": "2.0",
-                    "mode": "model",
-                },
-                "data_fingerprint.json": {"schema_version": "2.0"},
-                "schema.json": {
-                    "schema_version": "2.0",
-                    "partition_column": "_outer_fold",
-                },
-                "feature_manifest.json": {
-                    "schema_version": "2.0",
-                    "raw_input_features": ["age"],
-                },
-                "metrics.json": {
-                    "schema_version": "2.0",
-                    "primary_metric": {
-                        "name": "macro_f1",
-                        "direction": "maximize",
-                    },
-                    "final": {
-                        "eval_set": "outer_cv",
-                        "score": 0.42,
-                        "metric": "macro_f1",
-                        "aggregation": "mean",
-                        "fold_scores": [0.36, 0.45, 0.44, 0.43],
-                    },
-                },
-                "inference_test.json": {
-                    "command": "python artefacts/infer.py",
-                    "argv": ["{python}", "artefacts/infer.py"],
-                    "status": "passed",
-                    "row_count": 1,
-                    "trusted_model_sha256": hashlib.sha256(model_bytes).hexdigest(),
-                },
-            }
-            for filename, document in documents.items():
-                (artifacts / filename).write_text(json.dumps(document))
-            for filename, contents in {
-                "data_report.html": "<html></html>",
-                "data_summary.md": "# Summary",
-                "train.py": "pass\n",
-                "infer.py": "pass\n",
-                "model_card.md": "# Model card",
-                "requirements.lock": "scikit-learn==1.7.1\n",
-            }.items():
-                (artifacts / filename).write_text(contents)
-            (project / "results.md").write_text(
-                "# Results\n\nPrediction moment: encounter start. "
-                "No independent test set; results use nested outer CV."
-            )
-            completed = run(VALIDATE, project)
-            self.assertEqual(completed.returncode, 0, completed.stdout)
-
-    def test_legacy_v1_model_run_passes_with_explicit_warnings(self):
-        with tempfile.TemporaryDirectory() as directory:
-            project = Path(directory)
-            artifacts = project / "artefacts"
-            artifacts.mkdir()
-            (artifacts / "config.json").write_text(
-                json.dumps({"mode": "model-building"})
-            )
-            (artifacts / "metrics.json").write_text(
-                json.dumps(
-                    {
-                        "final": {
-                            "eval_set": "holdout_test",
-                            "score": 0.75,
-                        }
-                    }
-                )
-            )
-            for filename, contents in {
-                "train.py": "pass\n",
-                "infer.py": "pass\n",
-                "model.joblib": "legacy-placeholder",
-            }.items():
-                (artifacts / filename).write_text(contents)
-            completed = run(VALIDATE, project)
-            self.assertEqual(completed.returncode, 0, completed.stdout)
-            self.assertIn("legacy v1", completed.stdout)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("Unable to render report", result.stderr)
 
 
 if __name__ == "__main__":

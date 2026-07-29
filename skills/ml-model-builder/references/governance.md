@@ -3,179 +3,199 @@
 ## Contents
 
 - [Decision policy](#decision-policy)
+- [Mandatory execution approval](#mandatory-execution-approval)
 - [Question design](#question-design)
-- [Progress reporting](#progress-reporting)
-- [Managed processes](#managed-processes)
-- [Analysis-to-model transitions](#analysis-to-model-transitions)
-- [Budget and dependency control](#budget-and-dependency-control)
-- [Improvement runs](#improvement-runs)
+- [Progress and managed execution](#progress-and-managed-execution)
+- [Track-specific budgets](#track-specific-budgets)
+- [Classical candidate ledger](#classical-candidate-ledger)
+- [Backend additions and improvement evidence](#backend-additions-and-improvement-evidence)
 - [Audit trail](#audit-trail)
 
 ## Decision policy
 
 Classify decisions by consequence:
 
-- **Ask** — obtain explicit approval for choices that change the business
-  question, target, prediction moment, split semantics, irreversible data
-  handling, evaluation interpretation, large dependency installation, or
-  deployment decision.
-- **Recommend** — present a grouped table of material data-quality/modeling
-  findings with a recommended action and let the user approve or override the
-  group or individual rows.
-- **Default** — apply low-risk reversible mechanics such as seed 42, artifact
-  names, plot sampling seed, and safe output directories; record them.
-- **Required safeguard** — do not allow user convenience to silently introduce
-  target leakage, holdout reuse, unsafe deserialization, or false performance
-  claims. Explain the constraint and offer a valid alternative.
+- **Explicit approval** — require confirmation for the target, prediction
+  moment, features, split/evaluation semantics, primary metric, each execution
+  track and its budget, remote data transfer, high-stakes deployment, and any
+  irreversible action.
+- **Recommendation** — group material modeling-preflight findings in a concise
+  table with a recommended action and allow the user to approve or override
+  them.
+- **Default** — apply only low-risk reversible mechanics such as seed 42, safe
+  output names, and bounded concurrency; record them.
+- **Required safeguard** — do not allow convenience to introduce leakage,
+  invalid evaluation, unsafe deserialization, or false performance claims.
+  Explain the constraint and offer a valid alternative.
 
-Do not encode universal thresholds as scientific truths. A percentage is a
-screening trigger that must be interpreted in context.
+Treat thresholds as context-dependent screening triggers, not scientific
+constants.
+
+## Mandatory execution approval
+
+Complete source inspection and modeling preflight before proposing execution,
+but do not fit, build, query, or install a large optional backend until the
+user approves one experiment plan.
+
+Present:
+
+| Decision | Required detail |
+|---|---|
+| Problem | Target/label meaning, prediction moment, row/decision grain, intended and prohibited uses |
+| Features | Included feature contract and material exclusions |
+| Evaluation | Population, split design, primary metric, uncertainty method |
+| Classical | Include/decline, families, Optuna/search and compute budget |
+| AutoGluon | Include/decline, preset, time limit and resource budget |
+| SAP RPT | Include/decline, model/access route, context/query policy and request budget |
+| Selection | Operational constraints used alongside predictive quality |
+
+Recommend a concrete choice for each track. Require an explicit response that
+confirms or changes it. A request such as “train the best model” is not enough
+to infer that AutoGluon or SAP RPT should be excluded. Record the confirmed
+target/features in `problem`, the evaluation plan in `evaluation`, and set
+`approval.scope.target`, `feature_contract`, `split_design`, and
+`primary_metric` to true only after the user confirms those current values.
+Record each track's selection/status/budget and the approval time in
+`approval`, and any later approved plan change in `lineage.notes`.
+
+Do not start one track while the overall plan awaits approval. After approval,
+an unavailable dependency or access route may pause only that approved track
+while other approved tracks continue. Do not substitute an unapproved backend.
+
+For SAP RPT, obtain a second explicit confirmation before the first remote
+request when selected features, labels, or query rows will leave the local
+environment. Name the destination and data scope. Never request or store
+credentials.
 
 ## Question design
 
-Ask the smallest number of questions needed to avoid a wrong workflow.
+Ask the smallest number of questions required to avoid the wrong experiment.
 
-1. Ask blocking problem-framing questions before loading data.
-2. Profile data.
-3. Present related findings in a concise decision table:
+1. Resolve a problem-framing question before inspection only when plausible
+   answers materially change scientific validity, leakage, safety, or the
+   decision being supported.
+2. Otherwise infer the most reasonable target meaning, row grain, prediction
+   moment, and label semantics as explicitly provisional values.
+3. Inspect source data only for modeling preflight.
+4. Present the provisional semantics, findings, and proposed resolutions
+   together in the single approval gate:
 
    | Finding | Why it matters | Recommendation | Decision |
    |---|---|---|---|
 
-4. Separate unrelated high-impact questions, such as redefining the target or
+5. Present the mandatory experiment plan for approval.
+6. Separate unrelated high-impact decisions such as redefining the target or
    changing the prediction moment.
-5. Explain jargon in one sentence and state the consequence of each option.
 
-Avoid dozens of one-column-at-a-time prompts. Transparency means visible
-reasoning and recorded decisions, not unnecessary interruption.
+Explain jargon in one sentence and state the consequence of each option. Avoid
+one-column-at-a-time prompting. Do not write `approval.scope` confirmations
+until the user approves the provisional or corrected values.
 
-## Progress reporting
+## Progress and managed execution
 
-Use the host task/plan UI when available (`update_plan` in Codex or
-`TodoWrite` in Claude Code). Maintain one item per major workflow stage, not
-one item per chart or model trial.
+Use the host task UI when available. Maintain one item per major stage, not per
+model trial. Send concise user-visible updates at stage boundaries and during
+long work with useful new information such as completed folds, elapsed budget,
+best permitted development score, or current backend.
 
-Send user-visible updates:
+Write long-running entry points to disk and persist resumable progress. Use the
+host's managed-process/session mechanism for classical search, AutoGluon,
+large explainability runs, and long RPT request batches. Record the execution
+mechanism and session/task identifier in `run.json` when available.
 
-```text
-▶ Stage N — <name>
-✓ Stage N complete — <decision or result>
-```
+Do not shorten an approved budget merely to fit a foreground tool timeout.
 
-During long work, update at least once per minute with useful information such
-as completed trials, best validation score, elapsed budget, or current model
-family. Do not repeat unchanged status.
+## Track-specific budgets
 
-## Managed processes
+Do not express every backend as Optuna trials:
 
-Write long-running Python entry points to disk and make them persist progress
-and results. Launch them through the host's managed-process/session mechanism:
+- **Every approved track:** positive `cpu_count`, `parallel_jobs`, and
+  `memory_gb`, plus boolean `gpu_enabled`.
+- **Classical:** `candidate_families`, `minimum_family_coverage`,
+  `time_limit_seconds`, and `optuna_trials`.
+- **AutoGluon:** `preset`, `time_limit_seconds`, and `disk_gb`.
+- **SAP RPT:** `max_context_rows`, `max_query_rows`,
+  `max_rows_per_request`, `max_requests`, `max_retries`, and
+  `timeout_seconds`, plus remote-transfer approval and any latency/cost
+  envelope.
 
-- Codex: retain the command session ID and poll it.
-- Claude Code: use background Bash and poll the task ID.
+Ask before materially exceeding any approved budget.
 
-Use managed execution for model search, stacking, AutoGluon, large SHAP runs,
-or any operation likely to exceed a foreground tool timeout. Record
-`execution_mode: managed_process` and the session/task ID when available.
+## Classical candidate ledger
 
-Do not shorten the user-approved ML budget merely to fit a tool timeout.
+Freeze the classical roster from task, data, and deployment criteria before
+dependency inspection. Do not treat package absence as scientific
+unsuitability, but do not universally force the installation or execution of
+every possible library. Propose a defensible family set and coverage budget in
+the single approval gate.
 
-## Analysis-to-model transitions
+Give each candidate exactly one ledger row under
+`run.json.backends.classical.candidates` with:
 
-Before modeling a population used in analysis-only mode, inspect the prior
-report and audit trail for full-data target statistics, plots or decisions. A
-later split does not reseal overlapping target-exposed rows. Treat them as
-discovery/development data and use a fresh external or prospective population
-for an unbiased final estimate. If none is available, report development or
-previously exposed benchmark evidence, not an untouched estimate.
+- a unique non-empty `name`;
+- a non-empty `family`;
+- a non-empty `consideration_basis` explaining task/data/deployment fit;
+- `status`: `completed`, `failed`, or `excluded`;
+- a finite `score` for a completed candidate;
+- a concrete `reason` for a failed or excluded candidate.
 
-Record `config.analysis.pre_partition_target_exposure` with:
+Record every family in the approved roster exactly once, including eligible
+families that fail and proposed families excluded for scientific, deployment,
+dependency, or approved-budget reasons. Do not populate the ledger with every
+library that could theoretically solve the task. Keep detailed dependency and
+coverage information in `backends.classical.evidence`.
 
-- `status`: `none`, `development_only` or `full_population`;
-- `source`, `final_population_overlap`, `values_viewed` and
-  `decisions_influenced`.
+Do not put AutoGluon or SAP RPT in this ledger. They are independent approved
+tracks with different execution semantics.
 
-Use `none` only with a null source, no overlap and empty audit arrays. A
-`development_only` exposure cannot overlap final evaluation. For
-`full_population`, use a disjoint external/prospective final population or, if
-it overlaps, set `evaluation.independent_test: false`, record influenced
-decisions and set `run_manifest.json.evaluation_exposure.status` to
-`benchmark_selection`; never call it sealed.
+## Backend additions and improvement evidence
 
-## Budget and dependency control
+Keep approved backends that share the same source fingerprint, target, eligible
+features, splits, evaluation rows, weights, and metric implementation in one
+experiment directory.
 
-- Ask for a compute or elapsed-time budget before expensive search.
-- Use a conservative default when the user has no preference: enough to cover
-  each eligible family at least once, then adaptive search within a bounded
-  budget.
-- Freeze roster membership and suitability from task, data and deployment
-  criteria even when installed-package state is already known. Never use an
-  import, package list or prior environment observation as an eligibility
-  criterion.
-- Control CPU threads, process parallelism, memory, and GPU use explicitly.
-- Treat XGBoost, LightGBM and CatBoost as normal modeling dependencies. Install
-  them inside the project environment when selected unless a concrete
-  incompatibility or resource constraint applies. Ask before large optional
-  systems such as AutoGluon.
-- Record installation failures and continue with valid alternatives when
-  possible.
+When the user adds an optional backend later:
 
-Give every candidate exactly one unique ledger row with `family`,
-`consideration_basis`, `suitability_status`, `dependency_status`,
-`execution_status` and `reason`. Make `consideration_basis` explain
-task/data/deployment fit without referring to installed packages. Every
-supervised-tabular ledger must contain `xgboost`, `lightgbm` and `catboost`,
-including exclusions. Use only:
+1. Verify that the experiment contract is still identical.
+2. Obtain explicit approval for the added track and budget.
+3. Add only its required backend artifacts.
+4. Update `approval.tracks`, `backends`, `inference.backends`, selection,
+   `lineage.notes`, and `validation.json`.
+5. Refresh the inclusive `report.html` and `results.md`.
 
-- `suitability_status`: `eligible` or `excluded`;
-- `dependency_status`: `installed`, `installed_for_run`, `not_required`,
-  `installation_failed` or `user_declined`;
-- `execution_status`: `attempted`, `excluded`, `installation_failed`,
-  `user_declined` or `deferred_by_budget`.
+Do not create a full child run or copy the existing model, fold assignments,
+predictions, report assets, fixtures, or search trials merely to add a
+comparison.
 
-Use `eligible`, an available dependency state (`installed`,
-`installed_for_run` or `not_required`), and `attempted` for a run. Use
-`excluded/not_required/excluded` only for an environment-independent
-task/data/deployment reason. Use matching `installation_failed` or
-`user_declined` dependency/execution states for an eligible family. Use
-`deferred_by_budget` only with an available dependency and record the approved
-wall-time/compute cap, estimated minimum coverage, remaining budget and
-quantified shortfall. Require a concrete `reason` for every non-attempted row;
-use null only for an attempted row with no failure. Package absence alone is
-never an exclusion.
+Create a new run when the source data, target, feature contract, split,
+primary metric, modeling hypothesis, or released winner changes materially.
+Record the prior run ID and only the evidence required to explain the change;
+do not copy the prior directory.
 
-If an available family starts but cannot complete, keep
-`execution_status: attempted` and record its `metrics.json` family-result
-status as `failed`, with the reason and completed-trial count. Do not invent a
-`failed` execution status.
-
-## Improvement runs
-
-Create every improvement attempt as a new immutable run. Do not overwrite,
-relabel or delete the parent run. Record the run ID, parent run ID, parent
-artifact hashes, code revision, changed hypothesis, and data/split
-fingerprints.
-
-Maintain a final-evidence exposure ledger with the evaluation-population
-fingerprint, first-opened time and purpose, values viewed, and decisions they
-influenced. Treat exposed holdout, external or outer-fold results as historical
-benchmarks only; do not use them to select a descendant and still claim an
-unbiased result. Use untouched future/external evidence for that claim, or
-save the development-only child as explicitly incomplete with evaluation
-pending. It must not pass the completed-run validator or deployment handoff
-until a valid final evaluation contract and evidence exist.
+Treat any opened holdout/external/outer-fold result as historical evidence.
+Do not use it to select a descendant and still claim that descendant has an
+unbiased evaluation on the same population. Require untouched future/external
+evidence for that claim or label the result development-only.
 
 ## Audit trail
 
-Record user choices/defaults, assumptions, rejected alternatives, task route,
-compute budget, candidate roster, dependency outcomes and warning overrides in
-the selected run's `config.json`.
+Use the consolidated `run.json` as the machine-readable authority. Record:
 
-Record split assignments/fingerprint and overlap/order audits in
-`split_manifest.json`. Record run/parent identity, code revision, current
-data/split fingerprints, changed hypothesis and final-evidence exposure in
-`run_manifest.json`. Record metrics, family results, failures and actual usage
-in `metrics.json`.
+- source fingerprints and bounded queries;
+- problem, cohort, label, feature, and evaluation contracts;
+- modeling-preflight findings and approved resolutions;
+- the explicit experiment approval and approved later changes;
+- track selections, budgets, dependencies, execution status, failures, and
+  results;
+- split fingerprint and overlap/order/support audits;
+- final-evidence access and selection influence;
+- selected predictive and operational winners;
+- pinned environment in `requirements.lock`, backend runtime evidence, and the
+  `inference` contract;
+- prior-run references and same-experiment backend additions in
+  `lineage.notes`.
 
-The artifacts on disk are authoritative. If a chat summary conflicts with
-them, fix the summary or artifacts before handoff.
+Keep only trial or out-of-fold evidence required for a material result, and
+record its concise summary under the relevant `backends` entry. The files on
+disk are authoritative. Reconcile any conflicting chat or report statement
+before handoff.

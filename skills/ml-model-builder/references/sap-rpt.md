@@ -1,205 +1,245 @@
-# SAP RPT Comparison
+# SAP RPT Track
 
 ## Contents
 
-- [Position in the workflow](#position-in-the-workflow)
-- [Offer and setup boundary](#offer-and-setup-boundary)
-- [When to run](#when-to-run)
+- [Role and production positioning](#role-and-production-positioning)
+- [Approval and access](#approval-and-access)
+- [When to use](#when-to-use)
 - [Fair evaluation](#fair-evaluation)
-- [Context and query construction](#context-and-query-construction)
+- [Context and query packaging](#context-and-query-packaging)
 - [Response validation](#response-validation)
-- [Cost, scale, and reproducibility](#cost-scale-and-reproducibility)
-- [Artifacts and interpretation](#artifacts-and-interpretation)
+- [Scale and reproducibility](#scale-and-reproducibility)
+- [Inference and artifacts](#inference-and-artifacts)
+- [Selection](#selection)
 
-## Position in the workflow
+## Role and production positioning
 
-Treat SAP RPT as an explicit opt-in remote foundation-model benchmark beside
-AutoGluon. Do not add it to the mandatory classical candidate roster and do not
-let dependency availability affect XGBoost, LightGBM, or CatBoost coverage.
+Treat SAP RPT as a production-capable pretrained tabular foundation model for
+supported classification and regression tasks.
 
-Use RPT for supervised tabular classification or regression only. Do not use
-the tabular interface as a native forecasting, anomaly-detection, causal,
-uplift, or survival model. Reframe only when ordinary row-level supervision is
-scientifically valid.
+SAP RPT does not require project model training, fitting, Optuna, or
+hyperparameter search. The project prepares and manages:
 
-The internal playground is useful because it avoids requiring the user to
-provision an SAP BTP subaccount, AI Core, and RPT deployments. Label the CLI
-and its results as an internal, non-production benchmark. If RPT is best,
-report that result, but keep the deployable local pipeline separate until a
-supported production serving route is designed and tested.
+- a valid labelled context from permitted development rows;
+- query rows;
+- schema and task semantics;
+- batching and request budgets;
+- response validation;
+- evaluation and inference adapters.
 
-## Offer and setup boundary
+Separate the model from its access route:
 
-Offer RPT once during model building or improvement for a compatible task,
-whether or not this skill performed the earlier EDA:
+- The internal SAP RPT CLI provides convenient internal managed access without requiring
+  the user to provision a BTP subaccount, SAP AI Core instance, service keys,
+  or an RPT deployment.
+- Paying customers can use the same RPT model through SAP AI Core and manage
+  their production deployment, authentication, quotas, and billing there.
 
-> Would you like to benchmark SAP RPT? This optional experiment uses SAP's
-> internal playground, requires you to install and configure the private RPT
-> CLI, and sends selected training context and prediction rows to that service.
+The CLI's internal-use status describes the access channel, not the model's
+quality or production capability. Treat RPT as a first-class selectable
+backend.
 
-After opt-in:
+## Approval and access
 
-1. Check whether `sap-rpt` is available without changing the environment.
-2. If it is absent or unconfigured, direct the user to
-   `https://github.tools.sap/DL-COE/rpt-cli`.
-3. Ask the user to clone the repository, follow its current installation
-   instructions, and complete the interactive playground configuration.
-4. Pause only the RPT comparison until the user confirms completion. Continue
-   local modeling when useful.
-5. Never run the private clone or interactive configuration on the user's
-   behalf, and never request, display, log, or store credentials or tokens.
-6. After confirmation, inspect the installed CLI help/version and perform only
-   non-secret readiness checks before the first request.
+Include SAP RPT in the mandatory experiment approval. Present:
 
-Do not hard-code mutable installation instructions from the private repository
-into this skill. Record the installed package version and source revision
-reported by the user's checkout. Pin the version/revision used by the run.
+- include or decline;
+- RPT model and proposed access route;
+- target and eligible features;
+- labelled-context selection and maximum size;
+- maximum query rows and verified rows per request;
+- maximum calls/retries, request timeout, CPU count, parallel jobs, GPU flag,
+  memory, and latency/cost allowance;
+- data sent to the remote service.
 
-Before the first remote request, obtain explicit confirmation that the selected
-training-context features and labels plus query features may be sent to the
-named SAP endpoint. This is a remote-execution decision, not an automatic
-redaction rule; do not hide or transform values merely because RPT is used.
+Do not infer exclusion from “train the best model.” Recommend whether to include
+RPT and ask for confirmation.
 
-## When to run
+When the internal CLI is selected:
 
-Prefer an initial, development-only pilot when:
+1. Check whether `sap-rpt` is available without modifying the environment.
+2. If absent or unconfigured, direct the user to the current private
+   `rpt-cli` repository and its installation/configuration instructions.
+3. Keep credentials and interactive authentication user-managed; never
+   request, display, log, or store tokens.
+4. Inspect CLI help/version and perform non-secret readiness checks after the
+   user confirms setup.
+5. Do not provision BTP, AI Core, service keys, or an RPT deployment for this
+   route; the CLI handles access under the hood.
 
-- the task is classification or regression;
-- the table contains meaningful business attributes rather than mostly opaque
-  identifiers;
-- labels and context rows are representative of the scoring population;
-- the deployed RPT limits support the required columns, classes, context, and
-  query batch;
-- remote transfer, latency, and request volume are acceptable.
+Before the first request, obtain explicit confirmation that the named features,
+labels, and query rows may be sent to the named endpoint. Pause only this track
+when setup or transfer approval is missing.
 
-Skip or report the comparison as unavailable when:
+## When to use
 
-- the task is incompatible;
-- the user declines the remote request or private CLI setup;
-- no fold-valid representative context can be constructed;
-- the required probability semantics cannot be validated;
-- offline, edge, strict low-latency, or high-volume serving is mandatory;
-- the evaluation design would require an unaffordable number of remote calls.
+Use SAP RPT for supported supervised tabular classification or regression when:
 
-Use a two-stage budget. First run one fixed RPT model/deployment and one
-defensible context policy on development evidence. Try another RPT deployment,
-context size, or selector only if the pilot is competitive within the observed
-fold variation and the extra requests are justified. Never search RPT against
-the sealed final evaluation set.
+- row-level supervision is scientifically valid;
+- a representative fold-valid labelled context can be built;
+- deployed limits support the columns, classes, context, and query batches;
+- remote transfer, latency, request volume, and access are acceptable.
+
+Do not force the tabular interface onto native forecasting, causal/uplift,
+survival, or unlabeled anomaly tasks.
+
+Do not run when:
+
+- the user declines;
+- no leakage-safe representative context exists;
+- response probability/value semantics cannot support the approved metric;
+- offline/edge serving is mandatory and no acceptable RPT route exists;
+- required calls exceed the approved budget.
+
+These are task or access limitations, not limitations of the underlying RPT
+model.
 
 ## Fair evaluation
 
-- Reuse the persisted split assignments, target, feature-availability
-  contract, eligible rows, weights, and primary metric implementation.
-- Build every request context from the corresponding training fold only.
-  Never include validation, holdout, active outer-fold, or future labels.
-- Under nested CV, repeat the complete RPT context/model selection inside each
-  outer-training partition or label the RPT result development-only.
-- For temporal validation, use only rows and matured labels available before
-  the fold's scoring origin. For grouped validation, preserve the declared
-  group boundary in both context and query rows.
-- Freeze the RPT model/deployment, schema, context policy, query batching,
-  probability handling, and optional calibration before final evaluation.
-- Opt in before opening final evidence. If an RPT final result influences a
-  later model choice, mark the evaluation exposure `benchmark_selection` and
-  require new future/external evidence for an unbiased selected-model claim.
+Share information boundaries with other tracks:
 
-Native preprocessing may differ from a local estimator, but information may
-not. Use an explicit RPT schema. Represent numeric-looking identifiers and
-category codes as strings when they are not quantities. Keep row identifiers
-outside model features and use them to verify response alignment.
+- source population, target, and eligible prediction-time features;
+- development/evaluation row IDs, groups, times, and weights;
+- primary metric implementation;
+- final evidence boundary.
 
-## Context and query construction
+For every fold, build labelled context only from its permitted training rows
+and query the corresponding validation rows. Never include validation,
+holdout, active outer-fold, or future labels in context.
 
-Discover and record the actual deployed limits; do not assume a model-card or
-older CLI limit matches the active playground deployment. Use a conservative
-query batch until readiness testing confirms the limit.
+For temporal evaluation, use only features and matured labels available at the
+fold scoring origin. For grouped evaluation, preserve the group boundary in
+context and queries. Under nested CV, repeat any RPT model/context-policy
+selection inside the outer training partition or label the result
+development-only.
 
-Use the full fold-training population when it fits. Otherwise create one
+Freeze the RPT model, access/deployment route, schema, context policy, query
+batching, probability interpretation, and optional calibration before final
+evaluation.
+
+## Context and query packaging
+
+Treat context design as data management, not model training.
+
+Use the full fold-training population when supported. Otherwise create one
 deterministic context per fold:
 
-- classification: preserve representative class proportions and guarantee
-  support for every evaluated class; record intentional rebalancing because it
-  changes the apparent prior;
+- classification: preserve representative priors and include adequate support
+  for every evaluated class; record intentional rebalancing;
 - regression: preserve the target range, tails, important groups, and time
-  regimes using training rows only;
-- grouped data: select at the group unit before selecting rows;
-- temporal data: use an as-of or predeclared recency policy.
+  regimes;
+- grouped data: select groups before rows;
+- temporal data: use a declared as-of or recency policy.
 
-Record context row identifiers, order, selector name/version, seed, size, and a
-SHA-256 fingerprint. Do not default to batch-dependent or target-informed
-retrieval. When a stochastic selector is justified, test a small number of
-seeds on development data, then freeze one policy.
+Record context row IDs, order, selector logic, seed, size, class/target support,
+as-of boundary, schema, and SHA-256 fingerprint. Keep the same context for all
+query batches in a fold unless the approved policy explicitly requires
+otherwise.
 
-Keep the same context for every query batch in a fold. Test a small development
-sample for repeated-call stability and singleton-versus-batch invariance. Save
-the production-equivalent batch size.
+Keep identifiers outside model features and use them to verify response
+alignment. Represent numeric-looking codes as categorical/string fields when
+they are not quantities. Do not apply the classical preprocessing pipeline.
+
+Context-policy choices may be compared on development evidence within the
+approved request budget. Do not describe those choices as RPT hyperparameters
+or tune them on final evidence.
 
 ## Response validation
 
-Use a project-local benchmark script that invokes the configured CLI in a
-fail-closed way. Do not depend blindly on its sklearn wrapper. Require:
+Invoke the configured route fail-closed. Require:
 
-- process success and a successful status in the parsed response payload;
-- the expected response count and unique row-identifier alignment;
-- finite predictions with task-valid values;
-- an explicitly recorded model ID and actual deployment ID;
-- retained request IDs, timings, retries, and failure reasons.
+- process/request success and a successful parsed status;
+- exact response count and unique row-ID alignment;
+- finite task-valid predictions;
+- actual model and deployment/routing identifiers;
+- request IDs, timings, retries, and failure reasons.
 
-Do not assume a display `model_id` proves which remote deployment handled the
-request. Record the actual routing/deployment metadata used by the CLI.
+For classification, verify known unique classes, finite confidences in
+`[0, 1]`, and complete distributions that approximately sum to one. If the
+service returns truncated top-k results, use only metrics supported by those
+semantics; do not invent missing probabilities for log loss, Brier score,
+calibration, average precision, or AUC.
 
-For classification, request every class when feasible. Verify that returned
-classes are known and unique, confidences are finite and within `[0, 1]`, and
-each row forms a complete distribution that sums approximately to one. If the
-service returns only truncated top-k confidence, report label/top-k metrics
-only; do not calculate log loss, Brier score, calibration, average precision,
-or AUC as if missing classes had zero probability. Fit any calibrator only from
-task-valid out-of-fold RPT scores.
+Fit any calibration only from fold-valid out-of-fold RPT scores. For
+regression, verify finite outputs and treat intervals as unspecified until
+their semantics are documented and empirical coverage is measured.
 
-For regression, validate finite point predictions. Treat returned intervals as
-unspecified until their semantics are documented, then measure empirical
-coverage and width before relying on them.
+Test repeated-call stability and singleton-versus-batch behavior on a small
+development sample. Record the production-equivalent batch size.
 
-## Cost, scale, and reproducibility
+## Scale and reproducibility
 
-Calculate planned calls before running:
+Discover actual deployed limits rather than assuming an old model-card or CLI
+limit. Calculate planned calls before execution:
 
-`sum(ceil(query_rows_per_fold / verified_batch_limit))`
+```text
+sum(ceil(query_rows_per_fold / verified_batch_limit))
+```
 
-RPT retransmits context with requests and is not a streaming or full-data
-trainer. Record context/query rows, columns, approximate request bytes, call
-count, failures/retries, wall time, median/p95 latency, and throughput.
-For data larger than local resources, construct fold-valid bounded contexts and
-queries where the data already lives; do not download the full source merely
-to use RPT.
+Include retries and the required representative/single-row inference
+validation repeats in the approved request allowance.
 
-Remote results have limited point-in-time reproducibility. Record client
-version/revision, auth mode, endpoint, model and deployment IDs, schema,
-context/query fingerprints, selector seed, batch size, request IDs, timestamp,
-and raw response hashes. Never store service credentials.
+Record context/query rows and columns, approximate request bytes, call count,
+failures/retries, wall time, median/p95 latency, and throughput.
 
-## Artifacts and interpretation
+Remote results may have limited point-in-time reproducibility. Record:
 
-Record the conditional contracts in `config.json.comparison.sap_rpt` and
-`metrics.json.sap_rpt` as defined in `artifacts.md`. Keep supporting evidence
-under `<run-dir>/sap_rpt/`, including the project-local benchmark script,
-protocol, context manifest, request/response manifests, prediction rows, and
-hashes. Exclude tokens and credential files.
+- client version and source revision;
+- auth/access mode and endpoint;
+- RPT model and actual deployment/routing ID;
+- context/query fingerprints and batch size;
+- request IDs and timestamps;
+- raw response hashes when retained.
 
-Keep RPT out of `config.json.search.candidates`,
-`metrics.json.search.best_family`, and the deployable
-`metrics.json.selection.model`. Report it separately with:
+Never store service credentials. Do not download a huge remote source merely
+to use RPT; build bounded fold-valid contexts and queries where the data lives.
 
-- development and any permitted final metric;
-- comparison against the local winner on the same population;
-- context coverage and probability limitations;
-- latency/request volume and failures;
-- `role: benchmark_only`;
-- `reproducibility_status: limited_remote_service`;
-- the internal, non-production serving limitation.
+## Inference and artifacts
 
-If RPT wins, recommend a separate productionization decision covering an
-approved SAP AI Core/API route, exact deployment, production context
-selection/storage, authentication, quotas, resilience, observability,
-residency, monitoring, and validation on that exact serving path.
+Retain:
+
+```text
+backends/sap_rpt/
+├── context.parquet
+└── adapter.py                 # only when needed
+```
+
+Record the context policy, context hash, schema, model/access metadata, request
+summary, result, and limitations in root `run.json`. Do not create:
+
+- an RPT `train.py`;
+- a local model file;
+- Optuna trials;
+- training hyperparameters;
+- copied classical or AutoGluon artifacts;
+- redundant request/response trees.
+
+Implement and test:
+
+```text
+python infer.py --backend sap-rpt \
+  --input new_wines.csv --output predictions.csv
+```
+
+The adapter must load the frozen context, validate new-row schema, package
+queries, invoke the configured route, validate row alignment and response
+semantics, and emit the same task-level output contract as other retained
+backends.
+
+## Selection
+
+Report SAP RPT in the inclusive comparison table with its development and any
+permitted final metric, uncertainty, context coverage, probability limitations,
+request failures, latency, throughput, and access requirements.
+
+Permit SAP RPT to be:
+
+- the best predictive result;
+- the recommended operational backend;
+- the default inference backend.
+
+Base operational selection on the user's actual deployment constraints. When
+customer production use requires SAP AI Core, state the remaining deployment
+work—exact deployment, authentication, context storage, quotas, resilience,
+observability, residency, monitoring, and validation on that route—without
+downgrading the RPT model or invalidating the measured comparison.

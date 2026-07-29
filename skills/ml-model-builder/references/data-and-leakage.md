@@ -220,22 +220,21 @@ Use these checks to explain generalization risk, not to retune against holdout.
 
 ## Inference contract
 
-Save a machine-readable contract containing:
+Populate `run.json.inference` using the exact contract in `artifacts.md`.
+Record:
 
-- required/optional columns and dtypes;
-- allowed missingness and categories;
-- units and timezone;
-- feature order where required;
-- prediction moment and excluded post-event fields;
-- target column exclusion;
-- identifier passthrough for row alignment/output, kept separate from model
-  features;
-- current as-of scoring-population and eligibility rules when producing an
-  operational queue or outreach list;
-- sampling-weight and label-observation semantics when training data are not a
-  representative cohort;
-- behavior for extra/missing columns and unseen categories;
-- model/dependency version and trusted-artifact warning.
+- disjoint required and optional inputs;
+- a dtype for every declared input and an exact feature order;
+- missing-value and extra-column policy;
+- the excluded target column;
+- identifier inputs kept outside model features and mapped to the output row
+  ID for order/alignment checks;
+- one prediction column, optional probability columns, finite-value
+  requirement, and `[0, 1]` probability bounds;
+- one real root-`infer.py --backend ...` command per retained backend;
+- current as-of eligibility rules for batch queues;
+- units, timezone, unseen-category behavior, label/sampling semantics, and
+  trusted-artifact warning where applicable.
 
 Make `infer.py` fail with actionable messages for incompatible input. Do not
 silently coerce ambiguous dates, units or identifiers.

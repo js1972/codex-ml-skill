@@ -1,4 +1,4 @@
 interface:
   display_name: "ML Model Builder"
-  short_description: "Analyze data and build reliable classical ML models"
-  default_prompt: "Use $ml-model-builder to analyze this dataset, frame the prediction problem, and build or improve a leakage-safe ML solution with optional benchmarks when useful."
+  short_description: "Build and compare production-minded ML models"
+  default_prompt: "Use $ml-model-builder to frame, approve, build, compare, and package a leakage-safe ML solution with the execution tracks I choose."

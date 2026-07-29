@@ -1,59 +1,55 @@
 ---
 name: ml-model-builder
-description: Analyze and explain local, URL, or remote warehouse/lake datasets and build production-minded classical machine learning models in Codex or Claude Code. Use when users ask to explore, profile, understand, visualize, train, evaluate, compare, or improve tabular classification, regression, time-series forecasting, or anomaly-detection solutions. Covers memory- and leakage-aware data analysis, task-appropriate validation, high-stakes safeguards, Optuna optimization, optional AutoGluon and SAP RPT benchmarking, explainability, and deployable train/infer artifacts.
+description: Build, evaluate, compare, improve, and package production-minded tabular machine-learning solutions in Codex or Claude Code. Use when users ask to train or improve classification, regression, time-series forecasting, or anomaly-detection models; compare classical ML with optional AutoGluon or SAP RPT; or create reproducible training and inference artifacts. Covers leakage-safe validation, explicit execution approval, track-appropriate optimization, uncertainty, high-stakes safeguards, and deployable inference. Use the separate tabular-eda skill for exploratory data analysis without model building.
 ---
 
 # ML Model Builder
 
 ## Purpose
 
-Help a user understand a dataset, decide whether machine learning is suitable,
-and—when requested—produce an honestly evaluated, reproducible model with
-deployment-ready artifacts. Prefer a defensible simple solution over an
-elaborate model whose evaluation or serving assumptions are weak.
+Build an honestly evaluated, reproducible model and leave only the artifacts
+needed to understand, rebuild, validate, and use it. Prefer a defensible simple
+solution over complexity whose evaluation or serving assumptions are weak.
 
-## Operating modes
+## Scope boundary
 
-Choose one mode during intake and record it in `artefacts/config.json`.
+Do not perform standalone exploratory data analysis. When the request is only
+to understand, profile, visualize, or explore tabular data, use the sibling
+`tabular-eda` skill and stop this workflow.
 
-1. **Analysis only** — explain the dataset and produce an EDA report without
-   training a predictive model.
-2. **Model building** — analyze the dataset, build task-appropriate candidates,
-   evaluate them, and save training/inference artifacts.
-3. **Model improvement** — inspect an existing run and its artifacts, preserve
-   the meaning of its historical evaluation, then improve the workflow using
-   fresh development evidence. Do not repeatedly tune against an old holdout,
-   external test, or outer-fold result. Write every improvement to a new
-   versioned run, link it to its parent, and record which evaluation results
-   have already been exposed.
+Treat EDA and modeling as independent:
+
+- Start modeling from the declared source data.
+- Never discover, read, copy, link, or react to an EDA report or its files.
+- Never make an EDA run a prerequisite or ancestor of a model run.
+- Do not create `README.md`, `data_summary.md`, `data_profile.json`, `figures/`,
+  or an EDA report during model building.
+
+Perform only the narrow data checks required to define a valid modeling
+experiment: target validity, prediction moment, row grain, source cohort,
+label observation, schema, duplicates/groups, leakage, feature availability,
+class/event support, and split feasibility.
 
 ## Non-negotiable safeguards
 
 - Define the prediction or scoring moment before choosing features.
 - Establish how rows entered the dataset and why each label is observed.
-- Derive split assignments before target-aware analysis.
-- Audit earlier analysis-only target exposure before reusing a population for
-  modeling; never retroactively call overlapping rows sealed final evidence.
-- Keep global EDA target-blind under nested CV unless target-aware decisions are
-  repeated inside every outer training fold or use a separate discovery cohort
-  excluded from the outer estimate.
-- Fit every learned preprocessing step on training folds only.
-- Cross-fit target-derived encodings; ordinary fold placement alone is not
-  sufficient for training-row encodings.
-- Keep holdout/external targets sealed until the final candidate is fixed.
-- Respect time, group, and repeated-entity structure in every split and
-  permutation.
-- Choose model candidates from the task, data and constraints before checking
-  which libraries happen to be installed.
-- Treat unlabeled anomaly detection as prioritization for review, not measured
+- Keep holdout, external, and active outer-fold targets outside every model,
+  feature, threshold, calibration, and backend-selection decision.
+- Fit every learned classical preprocessing step on training folds only.
+- Cross-fit target-derived encodings while preserving group and time
+  boundaries.
+- Respect time, group, repeated-entity, and source-event structure in every
+  split, permutation, resample, and uncertainty estimate.
+- Choose candidates from the task, data, and deployment constraints rather
+  than installed packages.
+- Treat unlabeled anomaly detection as review prioritization, not measured
   predictive accuracy.
-- Report uncertainty, limitations, and operational constraints alongside point
+- Report uncertainty, limitations, and operational constraints with point
   estimates.
-- Never claim that a search heuristic proves a dataset's theoretical ceiling.
-- Treat the supplied dataset as available for analysis. Show observed labels and
-  values when they make the report more useful; do not add automatic redaction.
-- Never load an untrusted `joblib`/pickle artifact or execute untrusted
-  training/inference code; both can execute arbitrary code.
+- Never claim that a search plateau proves a dataset's theoretical ceiling.
+- Never load an untrusted pickle/joblib artifact or execute untrusted project
+  training or inference code.
 
 ## Reference routing
 
@@ -61,287 +57,255 @@ Read only the references needed for the selected route:
 
 | Need | Read |
 |---|---|
-| User decisions, progress, managed processes | `references/governance.md` |
-| EDA, charts, sampling, reporting | `references/data-analysis.md` |
-| Data larger than local memory/disk | `references/large-data.md` |
-| Data contracts, splitting, preprocessing, leakage | `references/data-and-leakage.md` |
+| Approval, decisions, budgets, managed execution | `references/governance.md` |
+| Data contract, splitting, preprocessing, leakage | `references/data-and-leakage.md` |
 | Classification or regression | `references/supervised-tabular.md` |
 | Forecasting or time-dependent prediction | `references/time-series.md` |
 | Supervised or unsupervised anomaly detection | `references/anomaly-detection.md` |
-| Optuna, signal checks, model search, stacking | `references/optimization-and-ensembling.md` |
+| Classical Optuna search, diagnostics, stacking | `references/optimization-and-ensembling.md` |
 | Metrics, uncertainty, explainability, deployment | `references/evaluation-and-production.md` |
 | Healthcare, finance, employment, insurance, or other high-stakes use | `references/high-stakes.md` |
-| Optional AutoGluon comparison | `references/automl.md` |
-| Optional SAP RPT comparison | `references/sap-rpt.md` |
-| Output files and versioned schemas | `references/artifacts.md` |
-| Example requests and clarification patterns | `references/examples.md` |
+| AutoGluon track | `references/automl.md` |
+| SAP RPT track | `references/sap-rpt.md` |
+| Minimal run files and backend layout | `references/artifacts.md` |
+| Large or remote data | `references/large-data.md` |
+| Example requests and clarifications | `references/examples.md` |
 
-Always read `governance.md`, `data-analysis.md`, `data-and-leakage.md`, and
-`artifacts.md`. In model-building or improvement mode, also read the selected
-task reference, `optimization-and-ensembling.md`, and
-`evaluation-and-production.md`. Read `automl.md` only after an explicit opt-in.
-Read `sap-rpt.md` only after offering SAP RPT for a compatible supervised
-tabular task and receiving an explicit opt-in.
-For classification/regression with future outcomes or delayed labels, read
-`time-series.md` as well for temporal validation and censoring safeguards.
-Read `large-data.md` before loading data that may exceed local memory or disk.
-Read `high-stakes.md` whenever predictions could materially affect a person's
-health, safety, liberty, employment, credit, insurance, education, housing, or
-access to essential services.
+Always read `governance.md`, `data-and-leakage.md`, `artifacts.md`, the selected
+task reference, and `evaluation-and-production.md`. Read
+`optimization-and-ensembling.md` only when the classical track is approved.
+Read `automl.md` or `sap-rpt.md` only when its track is approved. Read
+`time-series.md` for forecasting and for classification/regression with future
+outcomes or delayed labels. Read `large-data.md` before scanning data that may
+exceed local resources. Read `high-stakes.md` whenever predictions could
+materially affect a person's rights, health, safety, or access to essential
+services.
 
 ## Workflow
 
-Maintain a user-visible task list when the host supports one. Send a concise
-progress update at every major boundary. Follow `references/governance.md`.
+Maintain a user-visible task list when supported and send concise progress
+updates at major boundaries. Follow `references/governance.md`.
 
-### 1. Frame the problem
+### 1. Frame the modeling problem
 
 Ask only for missing information:
 
-- operating mode;
-- dataset location(s);
-- business question and decision the output will support;
-- task type and target, if known;
-- unit of observation and entity/group identifier;
-- unit of decision/action when it differs from a source row;
-- cohort inclusion/sampling rule, label-observation mechanism and sample
-  weights when applicable;
+- dataset location;
+- business question, target, task type, intended use, and prohibited uses;
+- row, entity/group, and decision/action grain;
+- cohort construction, sampling, label-observation mechanism, and weights;
 - prediction/scoring moment and features available then;
-- time column, horizon, frequency, and known-future covariates when relevant;
-- cost of false positives, false negatives, over- and under-prediction;
-- deployment/batch context, latency or resource constraints;
-- existing model, rule or measurable manual process, if one exists;
-- data-governance constraints and required subgroup checks;
-- standard or high-stakes risk classification;
+- time column, horizon, frequency, and known-future inputs when relevant;
+- error costs, review capacity, or asymmetric loss;
+- deployment, batch, latency, resource, privacy, and governance constraints;
+- incumbent model, rule, or measurable manual process;
+- risk classification;
 - compute/time budget.
 
-Use documented defaults only for low-risk reversible choices. Record all
+When the source and request make one row grain, prediction moment, target, and
+label meaning reasonably likely, state them as provisional and place them
+inside the single approval gate instead of asking separate preliminary
+questions. Ask a blocking question before that gate only when plausible
+alternatives would materially change leakage, label validity, split design,
+safety, or the business decision. Never record a provisional inference as
+confirmed.
+
+Use documented defaults only for low-risk reversible mechanics. Record
 assumptions and unresolved domain questions.
 
-### 2. Prepare the environment
+### 2. Run modeling preflight
 
-Create `.venv` in the user's project unless a suitable environment already
-exists. Install only required packages into that environment. Ask before large
-optional installations. Use the host's managed-process/session mechanism for
-long-running work; do not shorten an approved ML budget to fit a tool timeout.
+Inspect only enough data to validate the experiment. Confirm:
 
-An EDA-only environment does not define the later model search space. At model
-building time, freeze the scientifically eligible roster from task, data and
-deployment criteria even if package state is already known. Treat XGBoost,
-LightGBM and CatBoost as normal modeling dependencies unless a concrete
-incompatibility or resource constraint applies, then install missing selected
-dependencies into the project environment. Keep heavyweight optional systems
-such as AutoGluon opt-in.
+- source identity, format, size, row grain, keys, schema, and join semantics;
+- target derivation, label timing, maturity, observability, and support;
+- exact/key duplicates, repeated entities, groups, time ordering, and source
+  boundaries;
+- prediction-time feature availability, identifiers, sensitive fields, and
+  suspected post-outcome or target-derived columns;
+- split strategy and whether each development/evaluation fold has adequate
+  independent support;
+- environment and resource feasibility for the proposed tracks.
 
-Treat SAP RPT as a separate opt-in remote benchmark for tabular classification
-or regression, not as a normal dependency or candidate-roster member. Do not
-clone its private repository or configure authentication. If the user opts in
-and `sap-rpt` is unavailable or unconfigured, give the repository URL, ask the
-user to perform the clone, installation, and interactive playground
-configuration, and pause the RPT branch until they confirm completion. Never
-request credentials or tokens. Continue the ordinary local workflow while RPT
-is declined or unavailable.
+Do not generate exploratory charts or descriptive reports. Do not consume an
+existing EDA report. Use source data and user/domain input only.
 
-Before loading data, estimate memory, disk, scan, and compute requirements.
-Use the DuckDB profiler for data larger than safe in-memory limits. If data
-cannot fit local disk or compute, execute aggregations/training where the data
-already lives rather than downloading it.
+For a supported local CSV, TSV, or Parquet file, use the artifact-free helper
+with an existing interpreter that already imports pandas and NumPy:
 
-Fail closed before scanning a remote source whose size/cost or declared version
-is unknown. Require `--expected-source-bytes` and `--remote-source-version`;
-use `--allow-unknown-remote-preflight` only after an explicitly recorded
-decision. The generic URL profiler cannot verify version binding, so mark it
-limited until a native source client verifies the snapshot/version or the
-content is hashed.
+```text
+<python-with-pandas-and-numpy> scripts/inspect_model_data.py <dataset> \
+  --target <target> --task <auto|classification|regression> \
+  --row-grain "<confirmed-or-provisional grain>" \
+  --prediction-moment "<confirmed-or-provisional moment>" \
+  [--group-column <group>] [--time-column <time>] \
+  [--exclude <column> ...]
+```
 
-### 3. Load and establish the data contract
+The helper prints a compact assessment to stdout and must create no files. Do
+not install pandas, NumPy, or another dependency before experiment approval.
+If the current interpreter lacks them, report the missing dependency cleanly
+and use another existing suitable interpreter; if none exists, include the
+installation in the approval plan.
 
-Support local/object-store CSV/Parquet inputs and warehouse/lake tables through
-their native query engines. Validate formats, schema, target derivation, row
-grain, join keys, units, time coverage, label timing, and feature availability.
-Record the source population, inclusion/exclusion rule, positive/negative
-sampling, selective labeling, inclusion probabilities and weights. Do not treat
-unlabeled rows as negatives without evidence.
+### 3. Propose one experiment and obtain approval
 
-For multiple datasets, confirm join/concat semantics; never assume row-wise
-concatenation merely because schemas align.
+Before fitting, building, querying, installing a large optional dependency, or
+starting any backend, present a concise execution plan containing:
 
-Identify duplicate records, repeated entities, source-system columns,
-identifier-like fields, high-cardinality categoricals, free text, sensitive
-attributes, and suspected post-outcome fields. Do not remove anything before
-understanding its business meaning.
+- target and prediction moment;
+- included/excluded feature contract;
+- evaluation population, split strategy, primary metric, and uncertainty plan;
+- shared per-track CPU, parallel-job, memory, and GPU controls;
+- classical track: include/decline, candidate families, minimum coverage,
+  wall-time, and Optuna-trial budget;
+- AutoGluon track: include/decline, preset, wall-time, and disk budget;
+- SAP RPT track: include/decline, model/access route, context/query and remote
+  batch/request/retry/timeout budget;
+- operational constraints used to select a winner.
 
-### 4. Create evaluation partitions
+Require explicit user confirmation. “Train the best model” does not authorize
+silently omitting AutoGluon or SAP RPT; recommend a choice for each track and
+ask the user to approve or change it. Record the four confirmed experiment
+semantics as true booleans under `approval.scope` and the choice/budget for
+all three tracks under `approval.tracks`. Do not execute any track until
+approval is received.
 
-Choose random stratified, grouped, temporal, or grouped-temporal validation
-from the data-generating process—not from a fixed row-count rule. Persist row
-assignments or deterministic split rules in `split_manifest.json`. Audit group
-and duplicate overlap, temporal order, purge gaps and per-fold support. Check
-minimum class/event counts and coverage once when establishing partitions,
-then seal holdout targets before EDA or model decisions.
+Obtain any additional remote-data-transfer confirmation required by the SAP
+RPT route before its first request.
 
-In analysis-only mode, do not invent a holdout. Analyze the full permitted
-dataset and label the report as descriptive rather than predictive.
+### 4. Freeze evaluation boundaries
 
-Before later modeling the same population, audit whether analysis-only work
-inspected its targets. Treat overlapping rows as target-exposed
-discovery/development data; a later split cannot make them sealed. Use fresh
-external/prospective evidence for an unbiased final estimate, or report only
-development/previously exposed evidence and its limitation.
+Choose stratified, grouped, temporal, grouped-temporal, rolling-origin,
+nested-CV, external, or prospective validation from the data-generating
+process. Persist assignments or a deterministic rule and its fingerprint in
+`run.json`. Audit group/duplicate overlap, temporal order, purge gaps, label
+maturity, and per-fold support.
 
 Do not force a separate holdout when it would leave too few independent groups
 or rare events for meaningful evaluation. Predeclare nested/repeated outer CV,
-external validation, or prospective validation instead and state exactly what
-independence the estimate does and does not provide.
+external validation, or prospective validation and state the independence
+limits.
 
-### 5. Analyze and explain the dataset
+### 5. Execute approved tracks
 
-Run `scripts/profile_dataset.py` when its supported inputs match the task;
-otherwise follow `references/data-analysis.md` directly.
+Use the same target, eligible features, evaluation rows, folds, weights, and
+metric implementation across approved tracks. Share information boundaries,
+not implementation mechanics.
 
-- Use full data only for structural facts that do not inspect held-out targets.
-- Use the training partition for target-aware statistics and plots.
-- Under nested CV, keep global EDA target-blind. Nest target-aware choices
-  inside each outer training fold or exclude a dedicated discovery cohort from
-  the reported outer estimate.
-- Calculate statistics on all permitted rows; sample only expensive charts and
-  record the sample method.
-- Generate `data_report.html`, `data_summary.md`, `data_profile.json`, and
-  `figures/`.
-- Present findings as **blocker**, **warning**, or **information**.
-- Explain what each important chart means and what decision it may affect.
-- For panel time series, bound detailed example series with
-  `--max-panel-series` and report panel coverage separately; do not collapse
-  the panel into one unexplained mean.
+#### Classical
 
-If the mode is analysis only, validate the report, summarize the main findings
-and limitations, write the configured artifacts, and stop here.
+Build naive and fixed simple baselines. Apply fold-local preprocessing and
+bounded, task-aware model-family search. Use Optuna only here and only when it
+adds value. Give eligible families fair initial coverage, record failures, and
+control compute and memory.
 
-### 6. Build a fixed baseline and sanity checks
+#### AutoGluon
 
-Follow the selected task reference. Use a baseline appropriate to the decision:
+Pass each eligible raw training table, target, approved metric, fold
+boundaries, preset, and time/resource budget to AutoGluon. Let AutoGluon own
+its preprocessing, model construction, tuning, and ensembling. Do not put it
+inside external Optuna or feed it the classical transformed matrix.
 
-- classification: simple probabilistic linear baseline plus a naive prevalence
-  reference;
-- regression: median/mean naive reference plus regularized linear baseline;
-- forecasting: last-value and seasonal-naive references;
-- supervised anomaly detection: classification baselines suited to rare events;
-- unsupervised anomaly detection: stable ranking diagnostics and domain review.
+#### SAP RPT
 
-Run task-appropriate signal or learnability checks from
-`optimization-and-ensembling.md`. Treat them as diagnostics. Do not halt a
-nonlinear search solely because a linear probe missed plausible nonlinear
-signal.
+Package a fold-valid labelled context from training rows and query the
+pretrained RPT model for the corresponding evaluation rows. Do not describe
+this as training, fitting, hyperparameter tuning, or Optuna. Manage context
+selection, schema, batching, request budget, response validation, and access
+metadata.
 
-Ask whether an existing operational model, rule or measurable manual process
-exists. Compare it on the same eligible evaluation population when available;
-otherwise record that no incumbent baseline exists and continue with the naive
-and fixed baselines.
+Treat SAP RPT as a production-capable model. Distinguish the model from the
+access route: the internal CLI is a convenient internal managed access route;
+SAP AI Core is the paying-customer production route to the same model. Permit
+SAP RPT to be the predictive or operational winner when evidence and
+deployment constraints support it.
 
-### 7. Improve candidates within the budget
+### 6. Select and evaluate
 
-Freeze candidate membership and suitability from task, data and deployment
-criteria even if dependency state is already known, and before any dependency
-probe or final evaluation. Use task-aware cross-validation and bounded
-model-family searches. For supervised tabular work, write exactly one candidate
-ledger row for each of XGBoost, LightGBM and CatBoost using the status vocabulary
-in `references/governance.md`. Attempt each scientifically suitable family or
-record a concrete environment-independent exclusion, installation failure,
-user decline or quantified budget deferral. Give each eligible family minimum
-coverage before adaptive optimization. Keep preprocessing inside folds, record
-failed trials, control parallelism and memory, and stop on budget or defensible
-convergence.
+Select candidates, thresholds, calibration, forecast strategy, or review
+budget using only permitted development evidence. Evaluate the frozen
+procedure once on the declared holdout/external set or aggregate untouched
+outer folds.
 
-Treat stacking as optional. Attempt it only when diverse, competitive
-candidates and sufficient out-of-fold data exist. Select it only on validation
-evidence; never require diversity models that are unsuitable for the data.
+Report every approved backend's status and failure/unavailability reason or
+same-population score. Include uncertainty, error and subgroup slices,
+calibration/threshold behavior when relevant, practical value,
+latency/resource trade-offs, intended/prohibited uses, known limitations, and
+monitoring. Whenever the corresponding backend was approved, include the
+classical baseline/leaderboard, AutoGluon preset, or SAP RPT
+context/access/latency section even if it only records an unavailable or failed
+status. Separate “best predictive result” from “recommended operational
+choice” when they differ.
 
-For classification or regression, offer AutoGluon and SAP RPT once as optional
-comparisons regardless of whether EDA ran earlier. Run either only after
-explicit opt-in and follow its dedicated reference. Keep SAP RPT outside
-`search.candidates`; compare it on the same permitted splits and metric, and
-do not present the internal playground CLI as a deployable production model.
+### 7. Package and verify
 
-### 8. Select, calibrate, and evaluate
+Follow `references/artifacts.md`. Create one compact run directory with:
 
-Finalize the model, threshold, calibration, or anomaly-review budget using only
-the inner/development evidence permitted by the declared evaluation design.
-Build calibration from group/time-valid out-of-fold predictions, a permanently
-disjoint calibration set, or a declared calibrated-CV ensemble; never refit a
-calibrator on in-sample final-model predictions.
+- `run.json`;
+- self-contained `report.html`;
+- `results.md`;
+- root `infer.py` and, when classical or AutoGluon build reproducibility needs
+  it, root `train.py`;
+- `requirements.lock`;
+- only the backend artifacts required to rebuild or infer;
+- `validation.json`.
 
-Then evaluate once on the predeclared holdout/external set or aggregate
-untouched outer folds. Report:
+Omit `train.py` for an RPT-only run. Make `infer.py` select the approved operational recommendation
+by default and support `--backend classical|autogluon|sap-rpt` for every
+retained backend. Give SAP RPT a tested new-row inference path using the frozen
+context policy and access configuration. Its backend directory must not
+contain `train.py`.
 
-- primary and secondary metrics;
-- uncertainty intervals or repeated-fold variation;
-- calibration/threshold behavior where relevant;
-- error slices and requested subgroup checks;
-- comparison with naive and fixed baselines;
-- practical significance, not only statistical significance;
-- known limitations and likely failure modes.
+Record exact required/optional inputs, dtypes, missing/extra policy, excluded
+target, identifier/feature order, output columns, finite/probability bounds,
+and backend commands under `run.json.inference`. For every retained backend,
+declare representative, single-row, empty-input, and missing-required-column
+cases in `validation.json`. Dispatch the real backend, preserve row IDs, and
+repeat representative/single-row cases to verify deterministic output.
 
-For unlabeled anomaly ranking, do not invent a labeled holdout or predictive
-score. Freeze the scorer on historical/reference windows, assess stability and
-queue behavior on future scoring windows, and record reviewed outcomes when
-available.
-
-If holdout results influence a choice between candidates, label the holdout a
-benchmark-selection set and require new future/external data for an unbiased
-estimate.
-
-### 9. Explain and test production behavior
-
-Generate explainability only when it answers a user question. State the
-limitations of SHAP or other importance methods, especially with correlated
-features. Validate inference on representative rows, missing optional values,
-unseen categories, extra columns, wrong dtypes, and empty inputs. Measure
-artifact size and latency only with a documented benchmark context.
-
-When a supervised decision uses a fixed daily/weekly capacity, separate
-row-level scoring from whole-batch queue selection and test eligibility,
-cutoffs, ties, duplicate handling, empty and sub-capacity batches.
-
-### 10. Save and verify artifacts
-
-Follow `references/artifacts.md`. Always include `schema_version`. Save the data
-contract, feature manifest, data fingerprint, split manifest, run lineage,
-candidate ledger, dependency versions, intended-use limitations, and exact
-inference commands. Run the artifact-contract validator and real declared
-inference cases:
+Run the artifact validator and real inference round trips:
 
 ```text
 python scripts/validate_run.py <project-directory> \
   --artifacts-dir <run-directory> --run-inference-test
 ```
 
-Contract validation cannot prove that the scientific design was followed, but
-it must verify that declared inference cases produced real, schema-compatible
-outputs. Reconcile scripts, logs, folds, metrics and reports before declaring
-completion.
+Use temporary fixtures and prediction outputs during validation; do not retain
+them in the final run. Reconcile code, folds, metrics, report, and inference
+behavior before handoff.
+
+### 8. Extend or improve without duplication
+
+Keep all approved backends for the same data, target, feature contract, splits,
+and metric in one experiment. When the user later adds AutoGluon or SAP RPT to
+that experiment, add only its `backends` entry and directory, update the
+approval, inference, selection, validation, and `lineage.notes` contracts, then
+refresh the inclusive root report and results. Do not copy the parent model,
+folds, predictions, plots, fixtures, or other unchanged files.
+
+Create a separate run only when the data, target, split, metric, modeling
+hypothesis, or released winner changes materially. Do not tune descendants
+against previously opened final evidence while claiming a new unbiased result.
 
 ## Completion checklist
 
-- [ ] Mode, business decision, prediction moment, row grain, and error costs
-      are recorded.
-- [ ] Cohort construction, label observation, sampling and weights are recorded.
-- [ ] Split/evaluation strategy matches time/group/entity structure and every
-      holdout/external/outer-fold target boundary remained sealed; the split
-      manifest passes its structural audits.
-- [ ] EDA artifacts exist and target-aware analysis used training data only.
-- [ ] Feature availability and target derivation were audited for leakage.
-- [ ] Preprocessing, resampling, and feature selection occurred inside folds.
-- [ ] Baselines, optional incumbent comparison, candidate ledger, model search,
-      and metrics match the selected task reference.
-- [ ] Thresholds/calibration/forecast horizon/anomaly review budget are recorded
-      when applicable.
-- [ ] Final evaluation includes uncertainty, error analysis, and limitations.
-- [ ] Inference schema and round-trip behavior were tested.
-- [ ] Improvement lineage and evaluation-exposure history are preserved.
-- [ ] Required artifacts pass `scripts/validate_run.py`.
-- [ ] Optional AutoGluon, SAP RPT, or explainability ran only when requested;
-      any RPT installation/configuration remained user-managed.
-- [ ] `results.md` and `data_summary.md` agree with machine-readable artifacts.
+- [ ] Record the decision, target, prediction moment, row grain, cohort, labels,
+      feature contract, error costs, risk, and deployment constraints.
+- [ ] Obtain and record explicit approval for the evaluation plan, every track,
+      and each track's budget before execution.
+- [ ] Verify splits, leakage controls, label maturity, support, and fold-local
+      classical preprocessing.
+- [ ] Keep AutoGluon autonomous and outside external Optuna/classical
+      preprocessing.
+- [ ] Treat SAP RPT as pretrained; package context/query data without training
+      artifacts or training terminology.
+- [ ] Compare approved tracks on shared evaluation boundaries and metric code.
+- [ ] Report baselines, uncertainty, errors, limitations, predictive winner,
+      operational recommendation, and exact inference commands.
+- [ ] Test unified inference for every retained backend.
+- [ ] Keep the run minimal, self-contained, and free of EDA or duplicated
+      parent artifacts.
+- [ ] Pass `scripts/validate_run.py`.
 
-If a checklist item cannot apply, record the reason rather than omitting it
-silently.
+If an item does not apply, record why rather than omitting it silently.

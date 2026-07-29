@@ -4,7 +4,7 @@
 
 - [Choose the correct problem](#choose-the-correct-problem)
 - [Forecast contract](#forecast-contract)
-- [Panel profiling](#panel-profiling)
+- [Panel modeling preflight](#panel-modeling-preflight)
 - [Validation](#validation)
 - [Baselines and models](#baselines-and-models)
 - [Multi-horizon strategy](#multi-horizon-strategy)
@@ -46,15 +46,14 @@ Record:
 - cold-start behavior for new entities;
 - operational cost of late/early or under/over forecasts.
 
-## Panel profiling
+## Panel modeling preflight
 
-Report target-blind full-population series counts and distributions of history
-length, coverage and gaps. Compute target levels, zeros and other
-value-dependent diagnostics only on the permitted development or
-backtest-training population. Bound detailed traces to at most the configured
-`--max-panel-series` sample (default 12), record its deterministic selection,
-and do not infer panel-wide quality from those examples. Aggregate large remote
-panels near the source as described in `large-data.md`.
+Compute only the structural facts needed to validate modeling: full-population
+series counts, history-length/coverage distributions, gaps, target maturity,
+and per-origin support. Compute target levels and zero/intermittency behavior
+only on permitted development or backtest-training rows. Do not create an EDA
+report or figures. Aggregate large remote panels near the source as described
+in `large-data.md`.
 
 ## Validation
 

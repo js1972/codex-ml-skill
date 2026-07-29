@@ -17,7 +17,8 @@
 3. Reconcile the source-row grain with the decision/action grain. Aggregate,
    deduplicate or rank entities explicitly so frequent entities are not
    accidentally overweighted and one action does not appear multiple times.
-4. Select group/time-aware validation before target-aware EDA.
+4. Select and persist group/time-aware validation before any target-aware
+   modeling decision.
 5. Establish a naive reference and fixed simple model, and record whether a
    valid incumbent is available.
 6. Compare eligible candidates using identical folds and preprocessing
@@ -153,20 +154,24 @@ criteria even when package state is already known. Consider:
 
 ElasticNet does not create interactions unless interaction features are
 explicitly supplied. GaussianNB may require dense input and can be unsafe for
-large one-hot matrices. Install normal selected dependencies in the project
-environment as defined in `governance.md`; XGBoost, LightGBM and CatBoost are
-normal modeling dependencies unless a concrete incompatibility or resource
-constraint applies. Missing packages do not make a family unsuitable.
+large one-hot matrices. Install selected dependencies only after approval.
+Missing packages do not make a family scientifically unsuitable, but the skill
+does not need to force every boosting library into every experiment.
 
-Include exactly one `xgboost`, `lightgbm` and `catboost` row in every supervised
-candidate ledger, even when excluded or not run. Use only the status vocabulary
-and state combinations in `governance.md`, including a non-empty
-`consideration_basis` derived only from task/data/deployment fit. Give
-exclusions environment-independent reasons and quantify every budget deferral.
-Record installation/runtime failures and roster coverage gaps. Keep AutoGluon
-and SAP RPT outside this roster unless the user opts in. Treat RPT as a
-separate remote benchmark and follow `sap-rpt.md`; never let its private CLI
+Choose a defensible roster from task/data/deployment fit, approved resources,
+and desired family coverage. Use the single candidate-ledger contract in
+`governance.md`: require unique candidate names and a non-empty
+`consideration_basis`, and record every approved family as completed, failed,
+or excluded with a concrete reason when it does not complete. Record
+installation/runtime failures and any approved coverage gap. Keep AutoGluon and
+SAP RPT outside the classical roster. Execute them only as explicitly approved
+independent tracks and follow `automl.md` or `sap-rpt.md`; never let their
 availability change classical candidate eligibility or coverage.
+
+AutoGluon receives the eligible raw table and owns its complete model-building
+pipeline. SAP RPT receives a managed labelled context plus query rows and
+requires no fitting or hyperparameter search. Compare all approved tracks on
+the same row IDs, folds, weights, and metric implementation.
 
 ## Small, wide, and large data
 

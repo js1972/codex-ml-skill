@@ -92,10 +92,10 @@ cannot guarantee daily capacity under score drift. Separate `score_rows` from a
 batch `select_queue` step, and test empty, sub-capacity and tied batches. Apply
 the same interface split to supervised rare-event queues.
 
-For an unlabeled anomaly run, make `selection.capacity.limit` match
-`metrics.anomaly_evaluation.review_capacity`, use `anomaly_score` rather than
-probability semantics in `inference_test.json`, and run the same fixed-capacity
-queue cases required by `artifacts.md`.
+For an unlabeled anomaly run, make
+`run.json.selection.capacity.limit` match the recorded anomaly review capacity,
+use `anomaly_score` rather than probability semantics in the unified inference
+contract, and run the fixed-capacity queue cases required by `artifacts.md`.
 
 Fit reference transformations on historical data only. Do not let the current
 day contaminate its own reference distribution. Freeze competing configurations

@@ -25,6 +25,9 @@
   do not call this specific full-data refit independently tested.
 - Report development/inner evidence separately from final/outer evidence.
 - If final evidence influences a later choice, stop calling it unbiased.
+- Compare every approved execution track on identical evaluation row IDs,
+  folds, weights, target semantics, and metric code. Different internal
+  preprocessing/build mechanics are expected; different evidence is not.
 
 Never compare a final result with a benchmark from different rows, horizon,
 label definition or metric implementation.
@@ -154,30 +157,34 @@ an approved sample, not on sealed holdout before final evaluation.
 
 ## Inference testing
 
-Run the real inference entry point on a nonempty fixture and retain its actual
-output. Do not substitute a schema-only check, mocked predictor or copied
-expected file. Verify finite values, row/identifier alignment, output column
-semantics and task constraints such as probability bounds, forecast horizons
-or anomaly-score direction.
+Run the real unified inference entry point for every retained backend on a
+nonempty temporary fixture. Inspect the actual output, then remove fixtures and
+prediction files after recording the checks in `validation.json`. Do not
+substitute a schema-only check, mocked predictor, or copied expected file.
+Verify finite values, row/identifier alignment, output column semantics, and
+task constraints such as probability bounds, forecast horizons, or
+anomaly-score direction.
 
-Test:
+For every retained backend, declare and execute the four required
+`validation.json` case kinds from `artifacts.md`:
 
-- a representative batch round-trip;
-- one row;
-- empty input, expecting either an empty output with the exact schema or the
-  documented actionable rejection;
-- missing optional and required columns;
-- extra columns;
-- wrong dtypes/units/timezones;
-- unseen categories;
-- all-missing permissible fields;
-- output row alignment and probability/threshold semantics;
-- target and post-event columns are not required.
+- `representative`: at least two rows, executed at least twice;
+- `single_row`: one row, executed at least twice;
+- `empty_input`: success with zero rows and the exact output schema;
+- `missing_required_column`: controlled non-zero exit with an actionable
+  message.
 
-Compare generated predictions with the saved expected/golden sample within a
-documented tolerance. For capacity workflows, test `score_rows` independently
-from whole-batch `select_queue`, including empty, sub-capacity, tied and
-ineligible batches.
+Every case must dispatch its actual declared backend. Require representative
+and one-row outputs to be byte-identical across repeats. Verify finite
+prediction/probability values, probability bounds, output row count, and input
+identifier order. Do not substitute a schema-only check, mocked predictor, or
+copied expected file.
+
+Also test optional-column omission, the declared extra-column policy, wrong
+dtypes/units/timezones, unseen categories, all-missing permissible fields, and
+that target/post-event columns are not required when applicable. For capacity
+workflows, test `score_rows` independently from whole-batch `select_queue`,
+including empty, sub-capacity, tied, and ineligible batches.
 
 ## Security and dependencies
 

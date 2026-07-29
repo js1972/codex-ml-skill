@@ -1,5 +1,11 @@
 # Signal Diagnostics, Optimization, and Ensembling
 
+Apply this reference to the approved classical track only. Do not wrap
+AutoGluon or SAP RPT in Optuna, classical preprocessing, or the classical
+candidate ledger. AutoGluon owns its model-building process; SAP RPT is a
+pretrained model queried with labelled context and has no project training or
+hyperparameter search.
+
 ## Contents
 
 - [Learnability diagnostics](#learnability-diagnostics)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tabular EDA"
+  short_description: "Explore tabular data in one portable report"
+  default_prompt: "Use $tabular-eda to explore this dataset, explain the important findings in chat, and create one self-contained HTML report."
