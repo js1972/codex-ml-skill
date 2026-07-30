@@ -125,7 +125,10 @@ Inspect only enough data to validate the experiment. Confirm:
   suspected post-outcome or target-derived columns;
 - split strategy and whether each development/evaluation fold has adequate
   independent support;
-- environment and resource feasibility for the proposed tracks.
+- environment and resource feasibility for the proposed tracks;
+- read-only dependency and access readiness for every proposed backend, plus
+  an AutoGluon runtime range estimated from dataset size, preset, validation
+  design, hardware, and prior local evidence when available.
 
 Do not generate exploratory charts or descriptive reports. Do not consume an
 existing EDA report. Use source data and user/domain input only.
@@ -159,7 +162,9 @@ starting any backend, present a concise execution plan containing:
 - shared per-track CPU, parallel-job, memory, and GPU controls;
 - classical track: include/decline, candidate families, minimum coverage,
   wall-time, and Optuna-trial budget;
-- AutoGluon track: include/decline, preset, wall-time, and disk budget;
+- AutoGluon track: include/decline, preset, estimated runtime range,
+  `run_to_completion` or `time_limited`, optional time limit, and resource/disk
+  budget;
 - SAP RPT track: include/decline, model/access route, context-row,
   total-request-row, query-batch-row, column, request/retry/timeout budget,
   named remote destination, and transferred feature/label/query/identifier
@@ -172,6 +177,14 @@ is available, such as Codex `request_user_input` or Claude Code
 to change the plan; never require the user to type an exact sentence or magic
 phrase. If no structured tool is exposed, accept a normal semantic yes/no or
 requested changes.
+
+Collect every foreseeable blocking decision into this one structured question
+invocation after preflight. Disclose missing dependencies, planned installs,
+authentication/readiness blockers, runtime estimates, resource limits, and
+remote transfers before asking. Default AutoGluon to `run_to_completion` when
+the user asks for the best model and has not requested a deadline. Even when
+the estimate is many hours, present completion as an explicit option rather
+than silently imposing a cutoff.
 
 Require one explicit user approval for the consolidated plan. “Train the best
 model” does not authorize silently omitting AutoGluon or SAP RPT; recommend a
@@ -192,6 +205,12 @@ Ask another structured approval question only if the RPT destination or
 transferred feature, label, query-row, identifier, sensitivity, or volume scope
 materially expands beyond the consolidated approval, or an external policy
 independently requires it.
+
+After approval, start the approved classical, AutoGluon, and SAP RPT work
+without routine follow-up questions so the user can walk away. Use managed,
+resumable processes and continue unaffected tracks when one is unavailable or
+fails. Ask again only when completion needs new authority or a material scope
+change that was not reasonably foreseeable at the approval gate.
 
 ### 4. Freeze evaluation boundaries
 
@@ -228,9 +247,12 @@ control compute and memory.
 #### AutoGluon
 
 Pass each eligible raw training table, target, approved metric, fold
-boundaries, preset, and time/resource budget to AutoGluon. Let AutoGluon own
-its preprocessing, model construction, tuning, and ensembling. Do not put it
-inside external Optuna or feed it the classical transformed matrix.
+boundaries, preset, run mode, and resource budget to AutoGluon. For
+`run_to_completion`, call `fit(..., time_limit=None)` and let the configured
+model roster finish. For `time_limited`, pass the approved positive limit. Let
+AutoGluon own its preprocessing, model construction, tuning, and ensembling.
+Do not put it inside external Optuna or feed it the classical transformed
+matrix.
 
 When `parallel_jobs=1`, set AutoGluon's fold fitting strategy to
 `sequential_local` and record the reason. Capture the native leaderboard and a
@@ -349,12 +371,13 @@ against previously opened final evidence while claiming a new unbiased result.
 - [ ] Record the decision, target, prediction moment, row grain, cohort, labels,
       feature contract, error costs, risk, and deployment constraints.
 - [ ] Obtain and record explicit approval for the evaluation plan, every track,
-      and each track's budget before execution.
+      each track's budget, AutoGluon run mode, known installs/readiness work,
+      and RPT transfer before execution.
 - [ ] Verify splits, leakage controls, label maturity, support, and fold-local
       classical preprocessing.
 - [ ] Keep AutoGluon autonomous and outside external Optuna/classical
-      preprocessing; package a prediction-equivalent deployment clone and test
-      cold-start inference.
+      preprocessing; default best-model requests to run-to-completion, package
+      a prediction-equivalent deployment clone, and test cold-start inference.
 - [ ] Treat SAP RPT as pretrained; package context/query data without training
       artifacts or training terminology.
 - [ ] Compare approved tracks on shared evaluation boundaries and metric code.

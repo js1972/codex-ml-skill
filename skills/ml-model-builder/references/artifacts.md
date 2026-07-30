@@ -147,7 +147,13 @@ three backends:
           "memory_gb": 8,
           "gpu_enabled": false,
           "preset": "best_quality",
-          "time_limit_seconds": 1200,
+          "run_mode": "run_to_completion",
+          "time_limit_seconds": null,
+          "runtime_estimate": {
+            "lower_seconds": 900,
+            "upper_seconds": 7200,
+            "basis": "1599 rows, 11 features, best_quality, CPU-only"
+          },
           "disk_gb": 20
         }
       },
@@ -237,14 +243,16 @@ three backends:
       },
       "build": {
         "preset": "best_quality",
-        "time_limit_seconds": 1200,
+        "run_mode": "run_to_completion",
+        "time_limit_seconds": null,
         "predictor_path": "backends/autogluon/predictor",
         "fold_fitting_strategy": "sequential_local",
         "fold_fitting_strategy_reason": "parallel_jobs=1 and bounded local execution",
         "training_diagnostics": {
           "fit_summary_captured": true,
           "elapsed_seconds": 1184.6,
-          "stop_reason": "approved bounded build completed"
+          "completion_status": "completed_configuration",
+          "stop_reason": "configured model roster completed"
         },
         "packaging": {
           "method": "clone_for_deployment",
@@ -399,7 +407,9 @@ Every approved budget records positive `cpu_count`, `parallel_jobs`, and
 
 - classical: a non-empty unique `candidate_families` list,
   `time_limit_seconds`, `optuna_trials`, and `minimum_family_coverage`;
-- AutoGluon: `preset`, `time_limit_seconds`, and `disk_gb`;
+- AutoGluon: `preset`, `run_mode`, `runtime_estimate`,
+  `time_limit_seconds`, and `disk_gb`. Use null time for
+  `run_to_completion` and a positive time for `time_limited`;
 - SAP RPT: `max_requests`, `max_context_rows`, `max_request_rows`,
   `max_query_batch_rows`, `max_columns`, `max_retries`, and
   `timeout_seconds`.
@@ -407,7 +417,8 @@ Every approved budget records positive `cpu_count`, `parallel_jobs`, and
 Make the classical ledger's family set equal
 `approval.tracks.classical.budget.candidate_families`. Make classical
 `search.trials_budget` equal the approved `optuna_trials`. Make AutoGluon
-`build.preset` and `build.time_limit_seconds` match its approved budget.
+`build.preset`, `build.run_mode`, and `build.time_limit_seconds` match its
+approved budget.
 
 Record one `backends` entry for every approved track, even when it failed or
 was unavailable. Create its backend directory when status is `completed` or
@@ -449,10 +460,12 @@ training diagnostics. Create the clone with
 and run cold-start root inference in a fresh subprocess. Point
 `build.predictor_path` at `backends/autogluon/predictor`.
 
-Record its preset, time limit, fold-fitting strategy/reason, result, native
-leaderboard, structured internal-failure list, runtime thread limits,
-prediction-equivalence evidence, final predictor bytes, and peak packaging disk
-bytes. Require:
+Record its preset, run mode, optional time limit, runtime estimate,
+completion status, fold-fitting strategy/reason, result, native leaderboard,
+structured internal-failure list, runtime thread limits,
+prediction-equivalence evidence, final predictor bytes, and peak packaging
+disk bytes. Do not describe a `time_limit_reached` result as best without
+qualifying that it is the best found within the approved limit. Require:
 
 ```json
 {
@@ -502,8 +515,10 @@ python train.py --backend all
 Keep classical and AutoGluon mechanics separate. AutoGluon receives raw
 eligible tabular data and owns its build. Its rebuild path must also capture
 diagnostics, create and verify the deployment clone, and leave
-`backends/autogluon/predictor` inference-ready. Do not expose an RPT training
-option. Omit `train.py` entirely from an RPT-only run.
+`backends/autogluon/predictor` inference-ready. It must pass
+`time_limit=None` for `run_to_completion` or the positive approved limit for
+`time_limited`. Do not expose an RPT training option. Omit `train.py` entirely
+from an RPT-only run.
 
 The run is self-contained for report reading and inference, not necessarily
 for rebuilding from raw data. Do not duplicate the source dataset in the run

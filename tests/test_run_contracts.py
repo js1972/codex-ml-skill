@@ -152,7 +152,13 @@ def track_approval(backend: str, selected: bool) -> dict[str, Any]:
             **shared,
             "parallel_jobs": 1,
             "preset": "best_quality",
-            "time_limit_seconds": 600,
+            "run_mode": "run_to_completion",
+            "time_limit_seconds": None,
+            "runtime_estimate": {
+                "lower_seconds": 300,
+                "upper_seconds": 3600,
+                "basis": "small tabular fixture on approved CPU resources",
+            },
             "disk_gb": 16,
         },
         "sap_rpt": {
@@ -235,7 +241,8 @@ def create_backend(run_dir: Path, backend: str) -> dict[str, Any]:
             **common,
             "build": {
                 "preset": "best_quality",
-                "time_limit_seconds": 600,
+                "run_mode": "run_to_completion",
+                "time_limit_seconds": None,
                 "predictor_path": "backends/autogluon/predictor",
                 "fold_fitting_strategy": "sequential_local",
                 "fold_fitting_strategy_reason": (
@@ -244,7 +251,8 @@ def create_backend(run_dir: Path, backend: str) -> dict[str, Any]:
                 "training_diagnostics": {
                     "fit_summary_captured": True,
                     "elapsed_seconds": 582.4,
-                    "stop_reason": "approved bounded build completed",
+                    "completion_status": "completed_configuration",
+                    "stop_reason": "configured model roster completed",
                 },
                 "packaging": {
                     "method": "clone_for_deployment",
@@ -750,6 +758,16 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
                 "candidate_families must be a non-empty unique string list",
             ),
             ("autogluon", "preset", "preset must be a non-empty string"),
+            (
+                "autogluon",
+                "run_mode",
+                "run_mode must be 'run_to_completion' or 'time_limited'",
+            ),
+            (
+                "autogluon",
+                "runtime_estimate",
+                "runtime_estimate must be an object",
+            ),
             ("autogluon", "disk_gb", "disk_gb must be a positive finite number"),
             (
                 "sap_rpt",
@@ -775,6 +793,66 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
                 completed = run_validator(project)
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertIn(expected, completed.stdout)
+
+    def test_autogluon_supports_completion_or_explicit_time_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("autogluon",))
+            document = read_json(run_dir / "run.json")
+            budget = document["approval"]["tracks"]["autogluon"]["budget"]
+            build = document["backends"]["autogluon"]["build"]
+
+            budget["run_mode"] = "time_limited"
+            budget["time_limit_seconds"] = 600
+            build["run_mode"] = "time_limited"
+            build["time_limit_seconds"] = 600
+            build["training_diagnostics"]["completion_status"] = (
+                "time_limit_reached"
+            )
+            build["training_diagnostics"]["stop_reason"] = (
+                "approved time limit reached"
+            )
+            write_json(run_dir / "run.json", document)
+
+            completed = run_validator(project)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+
+            budget["run_mode"] = "run_to_completion"
+            build["run_mode"] = "run_to_completion"
+            write_json(run_dir / "run.json", document)
+
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "time_limit_seconds must be null when run_mode is "
+                "'run_to_completion'",
+                completed.stdout,
+            )
+            self.assertIn(
+                "completion_status must be 'completed_configuration' for "
+                "run_to_completion",
+                completed.stdout,
+            )
+
+    def test_autogluon_runtime_estimate_must_be_ordered_and_explained(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("autogluon",))
+            document = read_json(run_dir / "run.json")
+            estimate = document["approval"]["tracks"]["autogluon"]["budget"][
+                "runtime_estimate"
+            ]
+            estimate["lower_seconds"] = 7200
+            estimate["upper_seconds"] = 3600
+            estimate["basis"] = ""
+            write_json(run_dir / "run.json", document)
+
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("lower_seconds cannot exceed upper_seconds", completed.stdout)
+            self.assertIn("runtime_estimate.basis must be non-empty", completed.stdout)
 
     def test_autogluon_rejects_external_optuna_and_preprocessing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

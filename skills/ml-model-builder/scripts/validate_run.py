@@ -710,7 +710,9 @@ def _validate_budget(
         },
         "autogluon": {
             "preset",
+            "run_mode",
             "time_limit_seconds",
+            "runtime_estimate",
             "disk_gb",
         },
         "sap_rpt": {
@@ -772,11 +774,69 @@ def _validate_budget(
             f"{field}.preset must be a non-empty string",
             errors,
         )
+        run_mode = budget.get("run_mode")
         require(
-            is_positive_integer(budget.get("time_limit_seconds")),
-            f"{field}.time_limit_seconds must be a positive integer",
+            run_mode in {"run_to_completion", "time_limited"},
+            f"{field}.run_mode must be 'run_to_completion' or 'time_limited'",
             errors,
         )
+        require(
+            "time_limit_seconds" in budget,
+            f"{field}.time_limit_seconds must be present",
+            errors,
+        )
+        if run_mode == "run_to_completion":
+            require(
+                budget.get("time_limit_seconds") is None,
+                f"{field}.time_limit_seconds must be null when run_mode is "
+                "'run_to_completion'",
+                errors,
+            )
+        elif run_mode == "time_limited":
+            require(
+                is_positive_integer(budget.get("time_limit_seconds")),
+                f"{field}.time_limit_seconds must be a positive integer when "
+                "run_mode is 'time_limited'",
+                errors,
+            )
+        estimate = budget.get("runtime_estimate")
+        if require(
+            isinstance(estimate, dict),
+            f"{field}.runtime_estimate must be an object",
+            errors,
+        ):
+            validate_known_keys(
+                estimate,
+                {"lower_seconds", "upper_seconds", "basis"},
+                f"{field}.runtime_estimate",
+                errors,
+            )
+            lower = estimate.get("lower_seconds")
+            upper = estimate.get("upper_seconds")
+            require(
+                is_positive_integer(lower),
+                f"{field}.runtime_estimate.lower_seconds must be a positive "
+                "integer",
+                errors,
+            )
+            require(
+                is_positive_integer(upper),
+                f"{field}.runtime_estimate.upper_seconds must be a positive "
+                "integer",
+                errors,
+            )
+            if is_positive_integer(lower) and is_positive_integer(upper):
+                require(
+                    lower <= upper,
+                    f"{field}.runtime_estimate.lower_seconds cannot exceed "
+                    "upper_seconds",
+                    errors,
+                )
+            require(
+                is_nonempty_string(estimate.get("basis")),
+                f"{field}.runtime_estimate.basis must be non-empty",
+                errors,
+            )
         require(
             is_finite_number(budget.get("disk_gb")) and float(budget["disk_gb"]) > 0,
             f"{field}.disk_gb must be a positive finite number",
@@ -1342,17 +1402,43 @@ def validate_autogluon(
             "run.json: backends.autogluon.build.preset must be non-empty",
             errors,
         )
+        run_mode = build.get("run_mode")
         require(
-            is_positive_integer(build.get("time_limit_seconds")),
-            "run.json: backends.autogluon.build.time_limit_seconds must be "
-            "a positive integer",
+            run_mode in {"run_to_completion", "time_limited"},
+            "run.json: backends.autogluon.build.run_mode must be "
+            "'run_to_completion' or 'time_limited'",
             errors,
         )
+        require(
+            "time_limit_seconds" in build,
+            "run.json: backends.autogluon.build.time_limit_seconds must be present",
+            errors,
+        )
+        if run_mode == "run_to_completion":
+            require(
+                build.get("time_limit_seconds") is None,
+                "run.json: backends.autogluon.build.time_limit_seconds must be "
+                "null when run_mode is 'run_to_completion'",
+                errors,
+            )
+        elif run_mode == "time_limited":
+            require(
+                is_positive_integer(build.get("time_limit_seconds")),
+                "run.json: backends.autogluon.build.time_limit_seconds must be "
+                "a positive integer when run_mode is 'time_limited'",
+                errors,
+            )
         if isinstance(approved_budget, dict):
             require(
                 build.get("preset") == approved_budget.get("preset"),
                 "run.json: backends.autogluon.build.preset must match the "
                 "approved preset",
+                errors,
+            )
+            require(
+                build.get("run_mode") == approved_budget.get("run_mode"),
+                "run.json: backends.autogluon.build.run_mode must match the "
+                "approved run mode",
                 errors,
             )
             require(
@@ -1390,7 +1476,12 @@ def validate_autogluon(
         ):
             validate_known_keys(
                 training_diagnostics,
-                {"fit_summary_captured", "elapsed_seconds", "stop_reason"},
+                {
+                    "fit_summary_captured",
+                    "elapsed_seconds",
+                    "completion_status",
+                    "stop_reason",
+                },
                 "run.json: backends.autogluon.build.training_diagnostics",
                 errors,
             )
@@ -1407,6 +1498,23 @@ def validate_autogluon(
                 "elapsed_seconds must be a non-negative finite number",
                 errors,
             )
+            completion_status = training_diagnostics.get("completion_status")
+            require(
+                completion_status
+                in {"completed_configuration", "time_limit_reached"},
+                "run.json: backends.autogluon.build.training_diagnostics."
+                "completion_status must be 'completed_configuration' or "
+                "'time_limit_reached'",
+                errors,
+            )
+            if run_mode == "run_to_completion":
+                require(
+                    completion_status == "completed_configuration",
+                    "run.json: backends.autogluon.build.training_diagnostics."
+                    "completion_status must be 'completed_configuration' for "
+                    "run_to_completion",
+                    errors,
+                )
             require(
                 is_nonempty_string(training_diagnostics.get("stop_reason")),
                 "run.json: backends.autogluon.build.training_diagnostics."

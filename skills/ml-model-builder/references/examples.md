@@ -45,7 +45,8 @@ Proposed experiment
 - Evaluation: grouped-temporal folds; average precision
 - Classical: include; logistic baseline plus XGBoost/LightGBM/CatBoost;
   20-minute Optuna budget
-- AutoGluon: include; best_quality; 20-minute build budget
+- AutoGluon: include; best_quality; run to completion; estimated 20–90 minutes
+  on the approved CPU and memory
 - SAP RPT: include; internal CLI; fixed fold context; at most 20 requests
 - RPT transfer: eligible features, fold-context labels and validation query
   rows to the named managed RPT endpoint
@@ -55,9 +56,12 @@ Proposed experiment
 Label inferred row grain, prediction moment, and label meaning as provisional
 until the user approves them. Use the host's structured question tool when
 available, with “Approve plan” as the recommended option and concise change
-options. Never ask the user to type a particular sentence. This one approval
-also covers the disclosed RPT transfer; do not ask again before its first
-request. Do not silently omit AutoGluon or SAP RPT merely because the request
+options such as “Approve and run to completion,” “Approve with the displayed
+time limit,” and “Change plan.” Include every known install/readiness question
+in the same invocation. Never ask the user to type a particular sentence. This
+one approval also covers the disclosed RPT transfer; do not ask again before
+its first request. After approval, run all tracks without routine follow-up
+questions. Do not silently omit AutoGluon or SAP RPT merely because the request
 said “train.”
 
 Execute approved tracks on the same folds and metrics:

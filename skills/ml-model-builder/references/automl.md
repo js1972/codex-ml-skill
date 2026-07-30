@@ -39,12 +39,22 @@ Include AutoGluon in the mandatory experiment approval. Present:
 - raw eligible feature contract;
 - evaluation folds and primary metric;
 - preset;
-- wall-time, CPU count, parallel jobs, GPU flag, memory, and disk budget;
+- estimated runtime range and its basis;
+- `run_to_completion` or `time_limited`, with an optional limit only for the
+  latter;
+- CPU count, parallel jobs, GPU flag, memory, and disk budget;
 - any family/resource restrictions;
 - expected dependency size and installation impact.
 
-Do not probe or install AutoGluon before approval. If installation is required,
-obtain any additional approval required for the large dependency.
+Probe availability only through safe read-only checks before approval. If
+installation is required, disclose it in the consolidated structured approval
+instead of deferring a known question until execution.
+
+Recommend `run_to_completion` when the user asks for the best model and has not
+stated a deadline. Estimate duration from row/column counts, preset, validation
+repetitions, hardware, and relevant prior local runs. If it may take many
+hours, say so and let the user choose completion or an explicit time limit in
+the same upfront approval question.
 
 Use this track for supported tabular classification or regression. Reframe or
 decline when the task requires a different AutoGluon API, the data cannot
@@ -68,20 +78,29 @@ holdout, external, prospective, and active outer-fold targets out of
 AutoGluon model building, dynamic stacking, calibration, and early stopping.
 
 Under nested CV, rerun the complete AutoGluon builder inside every outer
-training partition. Decline the track when that cost exceeds the approved
-budget rather than running an incomparable shortcut.
+training partition. Include the multiplied runtime estimate in the upfront
+approval rather than running an incomparable shortcut or imposing an
+unapproved cutoff.
 
 ## Execution
 
 Let AutoGluon manage its own pipeline. Record:
 
 - AutoGluon and Python versions;
-- preset, time limit, resource limits, and dynamic-stacking settings;
+- preset, run mode, optional time limit, resource limits, and dynamic-stacking
+  settings;
 - included/excluded internal model families when constrained;
 - fold IDs and row counts supplied;
 - native leaderboard summary;
 - failures, elapsed time, peak memory, and disk usage when measurable;
 - stop reason.
+
+For `run_to_completion`, pass `time_limit=None` to
+`TabularPredictor.fit`. For `time_limited`, pass the approved positive number
+of seconds. Record `completion_status` as `completed_configuration` or
+`time_limit_reached`. A completed configuration means AutoGluon attempted the
+model roster selected by the preset; it is not a claim of theoretical maximum
+quality.
 
 Under `build.training_diagnostics`, record
 `fit_summary_captured`, `elapsed_seconds`, and `stop_reason` before cloning.
@@ -108,8 +127,9 @@ An internal model failure does not make the whole AutoGluon track failed when
 other constituent models complete and a valid predictor is produced. Include
 the ledger in `run.json`, `report.html`, and `results.md`.
 
-Do not claim that one preset or time limit is AutoGluon's maximum achievable
-quality. Report it as the approved bounded build.
+Do not describe a time-limited result as the best model without the qualifier
+“within the approved time limit.” For run-to-completion, report that the
+configured model roster completed, not that a theoretical ceiling was found.
 
 ## Selection and serving
 

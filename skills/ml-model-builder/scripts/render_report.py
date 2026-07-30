@@ -351,6 +351,7 @@ def backend_detail_sections(backends: dict[str, Any]) -> str:
                     [
                         ('Status', autogluon.get('status')),
                         ('Preset', build.get('preset')),
+                        ('Run mode', build.get('run_mode')),
                         ('Time limit (seconds)', build.get('time_limit_seconds')),
                         ('Predictor path', build.get('predictor_path')),
                         (

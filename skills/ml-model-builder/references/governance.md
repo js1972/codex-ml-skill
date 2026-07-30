@@ -45,7 +45,7 @@ Present:
 | Features | Included feature contract and material exclusions |
 | Evaluation | Population, split design, primary metric, uncertainty method |
 | Classical | Include/decline, families, Optuna/search and compute budget |
-| AutoGluon | Include/decline, preset, time limit and resource budget |
+| AutoGluon | Include/decline, preset, runtime estimate, run-to-completion or time-limited mode, optional time limit and resource budget |
 | SAP RPT | Include/decline, model/access route, context/query policy, request budget, named destination and transferred data scope |
 | Selection | Operational constraints used alongside predictive quality |
 
@@ -62,6 +62,12 @@ alternatives to change the plan. Never make approval depend on typing an exact
 sentence or magic phrase. If the host exposes no structured question tool,
 accept an ordinary semantic yes/no or requested changes.
 
+Before invoking that question, finish all safe read-only preflight checks that
+could reveal a later blocker: dependency availability, expected installs,
+AutoGluon runtime range, disk/resources, RPT CLI/access readiness, and transfer
+scope. Put every foreseeable decision in one structured question invocation so
+the user can approve the complete unattended run and walk away.
+
 Record the confirmed target/features in `problem`, the evaluation plan in
 `evaluation`, and set `approval.scope.target`, `feature_contract`,
 `split_design`, and `primary_metric` to true only after the user confirms those
@@ -77,6 +83,9 @@ interpretation or evidence exposure, not as the sole approval record.
 Do not start one track while the overall plan awaits approval. After approval,
 an unavailable dependency or access route may pause only that approved track
 while other approved tracks continue. Do not substitute an unapproved backend.
+Do not ask routine follow-up questions about choices already disclosed and
+approved. Ask again only when new authority or a material unforeseeable scope
+change is required.
 
 When SAP RPT is selected, include the named destination and structured
 feature/label/query/identifier transfer scope in the consolidated experiment
@@ -104,8 +113,9 @@ Ask the smallest number of questions required to avoid the wrong experiment.
    | Finding | Why it matters | Recommendation | Decision |
    |---|---|---|---|
 
-5. Present the mandatory experiment plan through the host's structured
-   question tool when available; do not request a typed approval sentence.
+5. Present all remaining decisions together through one invocation of the
+   host's structured question tool when available; do not request a typed
+   approval sentence or deliberately defer a known question until execution.
 6. Separate unrelated high-impact decisions such as redefining the target or
    changing the prediction moment.
 
@@ -126,6 +136,9 @@ large explainability runs, and long RPT request batches. Record the execution
 mechanism and session/task identifier in `run.json` when available.
 
 Do not shorten an approved budget merely to fit a foreground tool timeout.
+When AutoGluon `run_to_completion` is approved, continue even when the runtime
+estimate is several hours. A long duration is not itself a reason to interrupt
+or seek another confirmation.
 
 ## Track-specific budgets
 
@@ -135,7 +148,11 @@ Do not express every backend as Optuna trials:
   `memory_gb`, plus boolean `gpu_enabled`.
 - **Classical:** `candidate_families`, `minimum_family_coverage`,
   `time_limit_seconds`, and `optuna_trials`.
-- **AutoGluon:** `preset`, `time_limit_seconds`, and `disk_gb`.
+- **AutoGluon:** `preset`, `run_mode`, `runtime_estimate`,
+  `time_limit_seconds`, and `disk_gb`. Use `run_mode: "run_to_completion"` with
+  `time_limit_seconds: null`, or `run_mode: "time_limited"` with a positive
+  approved limit. Default best-model requests without a deadline to
+  run-to-completion.
 - **SAP RPT:** `max_context_rows`, `max_request_rows` for context plus query,
   `max_query_batch_rows` per call, `max_columns`, `max_requests`,
   `max_retries`, and `timeout_seconds`, plus remote-transfer approval and any

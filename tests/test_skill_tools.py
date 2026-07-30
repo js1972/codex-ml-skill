@@ -39,7 +39,15 @@ class ApprovalGuidanceTests(unittest.TestCase):
         self.assertIn("native structured question tool", skill)
         self.assertIn("never require the user to type an exact sentence", skill)
         self.assertIn("do not ask for a second rpt confirmation", skill)
+        self.assertIn(
+            "collect every foreseeable blocking decision into this one "
+            "structured question invocation",
+            skill,
+        )
+        self.assertIn("default autogluon to `run_to_completion`", skill)
+        self.assertIn("without routine follow-up questions", skill)
         self.assertIn("do not obtain a second confirmation", governance)
+        self.assertIn("one structured question invocation", governance)
         self.assertIn("do not ask a second rpt-specific confirmation", sap_rpt)
         self.assertNotIn("obtain a second explicit confirmation", governance)
 
@@ -360,7 +368,15 @@ def representative_run() -> dict:
                         "memory_gb": 8,
                         "gpu_enabled": False,
                         "preset": "medium_quality",
-                        "time_limit_seconds": 900,
+                        "run_mode": "run_to_completion",
+                        "time_limit_seconds": None,
+                        "runtime_estimate": {
+                            "lower_seconds": 300,
+                            "upper_seconds": 3600,
+                            "basis": (
+                                "small tabular dataset on approved CPU resources"
+                            ),
+                        },
                         "disk_gb": 10,
                     },
                 },
@@ -445,7 +461,8 @@ def representative_run() -> dict:
                 "retained": True,
                 "build": {
                     "preset": "medium_quality",
-                    "time_limit_seconds": 900,
+                    "run_mode": "run_to_completion",
+                    "time_limit_seconds": None,
                     "predictor_path": "backends/autogluon/predictor",
                     "fold_fitting_strategy": "sequential_local",
                     "fold_fitting_strategy_reason": (
@@ -454,7 +471,8 @@ def representative_run() -> dict:
                     "training_diagnostics": {
                         "fit_summary_captured": True,
                         "elapsed_seconds": 612.7,
-                        "stop_reason": "approved bounded build completed",
+                        "completion_status": "completed_configuration",
+                        "stop_reason": "configured model roster completed",
                     },
                     "packaging": {
                         "method": "clone_for_deployment",
@@ -634,6 +652,7 @@ class ConsolidatedReportTests(unittest.TestCase):
             self.assertIn("classical baselines and leaderboard", lower)
             self.assertIn("autogluon settings", lower)
             self.assertIn("medium_quality", lower)
+            self.assertIn("run_to_completion", lower)
             self.assertIn("deployment clone", lower)
             self.assertIn("internal failure ledger", lower)
             self.assertIn("neuralnetfastai", lower)

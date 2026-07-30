@@ -67,7 +67,8 @@ experiment plan for explicit approval:
 - evaluation rows, splits, primary metric, and uncertainty;
 - per-track CPU, memory, parallel-job, and GPU controls;
 - classical candidate families, minimum coverage, time, and Optuna trials;
-- AutoGluon choice, preset, time, and disk budget;
+- AutoGluon choice, preset, estimated runtime, run-to-completion or
+  time-limited mode, optional time limit, and disk/resources;
 - SAP RPT choice, context rows, context-plus-query request rows, query rows per
   call, columns, request/retry/timeout budget, access route, named destination,
   and transferred data scope;
@@ -80,6 +81,14 @@ question tool when available and never requires a typed approval sentence. If
 SAP RPT is selected, this one approval includes its disclosed remote transfer;
 there is no second RPT confirmation unless the destination or data scope later
 expands materially.
+
+The structured approval contains every foreseeable question before execution,
+including planned dependency installs and backend readiness. Best-model
+requests default AutoGluon to run-to-completion with no arbitrary cutoff. If
+that may take many hours, the question shows the estimate and lets the user
+approve completion or select a time limit. Once approved, the skill runs the
+classical, AutoGluon, and RPT tracks through managed processes without routine
+follow-up prompts.
 
 ## Three execution tracks
 
