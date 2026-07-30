@@ -46,17 +46,27 @@ Present:
 | Evaluation | Population, split design, primary metric, uncertainty method |
 | Classical | Include/decline, families, Optuna/search and compute budget |
 | AutoGluon | Include/decline, preset, time limit and resource budget |
-| SAP RPT | Include/decline, model/access route, context/query policy and request budget |
+| SAP RPT | Include/decline, model/access route, context/query policy, request budget, named destination and transferred data scope |
 | Selection | Operational constraints used alongside predictive quality |
 
 Recommend a concrete choice for each track. Require an explicit response that
 confirms or changes it. A request such as “train the best model” is not enough
-to infer that AutoGluon or SAP RPT should be excluded. Record the confirmed
-target/features in `problem`, the evaluation plan in `evaluation`, and set
-`approval.scope.target`, `feature_contract`, `split_design`, and
-`primary_metric` to true only after the user confirms those current values.
-Record each track's selection/status/budget and the approval time in
-`approval`. Initialize `approval.amendments` and
+to infer that AutoGluon or SAP RPT should be excluded. Conversely, an explicit
+request to include SAP RPT already answers that track's include/decline
+question; show it as selected rather than asking the user to choose it again.
+
+Use the host's native structured question tool for the consolidated approval
+whenever it is available, such as Codex `request_user_input` or Claude Code
+`AskUserQuestion`. Provide a recommended “approve plan” option plus concise
+alternatives to change the plan. Never make approval depend on typing an exact
+sentence or magic phrase. If the host exposes no structured question tool,
+accept an ordinary semantic yes/no or requested changes.
+
+Record the confirmed target/features in `problem`, the evaluation plan in
+`evaluation`, and set `approval.scope.target`, `feature_contract`,
+`split_design`, and `primary_metric` to true only after the user confirms those
+current values. Record each track's selection/status/budget and the approval
+time in `approval`. Initialize `approval.amendments` and
 `approval.remote_transfers` as lists, even when empty.
 
 For each later approved plan change, add one amendment with a unique ID,
@@ -68,12 +78,15 @@ Do not start one track while the overall plan awaits approval. After approval,
 an unavailable dependency or access route may pause only that approved track
 while other approved tracks continue. Do not substitute an unapproved backend.
 
-For SAP RPT, obtain a second explicit confirmation before the first remote
-request when selected features, labels, or query rows will leave the local
-environment. Name the destination and data scope. Never request or store
-credentials. Record a unique transfer approval ID, timestamp, backend,
-destination, purpose, and structured feature/label/query/identifier scope in
-`approval.remote_transfers`; reference that ID from the completed RPT backend.
+When SAP RPT is selected, include the named destination and structured
+feature/label/query/identifier transfer scope in the consolidated experiment
+approval. That one approval authorizes RPT requests within the disclosed scope;
+do not obtain a second confirmation before the first request. Record a unique
+transfer approval ID, timestamp, backend, destination, purpose, and data scope
+in `approval.remote_transfers`; reference that ID from the completed RPT
+backend. Ask again only when the destination or transferred fields,
+sensitivity, row volume, or purpose materially expands, or when an independent
+external policy requires another approval. Never request or store credentials.
 
 ## Question design
 
@@ -91,7 +104,8 @@ Ask the smallest number of questions required to avoid the wrong experiment.
    | Finding | Why it matters | Recommendation | Decision |
    |---|---|---|---|
 
-5. Present the mandatory experiment plan for approval.
+5. Present the mandatory experiment plan through the host's structured
+   question tool when available; do not request a typed approval sentence.
 6. Separate unrelated high-impact decisions such as redefining the target or
    changing the prediction moment.
 

@@ -15,6 +15,35 @@ INSPECT_SCRIPT = SCRIPTS / "inspect_model_data.py"
 REPORT_SCRIPT = SCRIPTS / "render_report.py"
 
 
+class ApprovalGuidanceTests(unittest.TestCase):
+    def test_rpt_uses_one_structured_approval_without_magic_words(self) -> None:
+        skill = " ".join(
+            (REPO_ROOT / "skills/ml-model-builder/SKILL.md")
+            .read_text(encoding="utf-8")
+            .lower()
+            .split()
+        )
+        governance = " ".join(
+            (REPO_ROOT / "skills/ml-model-builder/references/governance.md")
+            .read_text(encoding="utf-8")
+            .lower()
+            .split()
+        )
+        sap_rpt = " ".join(
+            (REPO_ROOT / "skills/ml-model-builder/references/sap-rpt.md")
+            .read_text(encoding="utf-8")
+            .lower()
+            .split()
+        )
+
+        self.assertIn("native structured question tool", skill)
+        self.assertIn("never require the user to type an exact sentence", skill)
+        self.assertIn("do not ask for a second rpt confirmation", skill)
+        self.assertIn("do not obtain a second confirmation", governance)
+        self.assertIn("do not ask a second rpt-specific confirmation", sap_rpt)
+        self.assertNotIn("obtain a second explicit confirmation", governance)
+
+
 class ModelingPreflightTests(unittest.TestCase):
     def run_inspection(
         self, dataset: Path, *extra: str

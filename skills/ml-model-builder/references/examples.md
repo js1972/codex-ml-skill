@@ -47,13 +47,18 @@ Proposed experiment
   20-minute Optuna budget
 - AutoGluon: include; best_quality; 20-minute build budget
 - SAP RPT: include; internal CLI; fixed fold context; at most 20 requests
+- RPT transfer: eligible features, fold-context labels and validation query
+  rows to the named managed RPT endpoint
 - Winner: predictive score plus weekly latency/capacity requirements
 ```
 
 Label inferred row grain, prediction moment, and label meaning as provisional
-until the user approves them. Wait for explicit confirmation or changes. Do
-not silently omit AutoGluon or SAP RPT merely because the request said
-“train.”
+until the user approves them. Use the host's structured question tool when
+available, with “Approve plan” as the recommended option and concise change
+options. Never ask the user to type a particular sentence. This one approval
+also covers the disclosed RPT transfer; do not ask again before its first
+request. Do not silently omit AutoGluon or SAP RPT merely because the request
+said “train.”
 
 Execute approved tracks on the same folds and metrics:
 
@@ -101,11 +106,14 @@ unreviewed or label-pending rows as unknown.
 Check whether source fingerprint, target, eligible features, folds, evaluation
 rows, weights, and metric code match the existing experiment. If they do:
 
-1. propose and obtain approval for the RPT model/access route, labelled-context
-   policy, remote transfer, and request budget;
+1. use one structured approval question for the RPT model/access route,
+   labelled-context policy, named remote transfer scope, and request budget;
 2. add only `backends/sap_rpt/` and its approved `run.json` backend/result;
 3. refresh the root inclusive `report.html` and `results.md`;
 4. test `infer.py --backend sap-rpt` on new wine rows.
+
+Do not follow that approval with a second transfer-confirmation prompt unless
+the destination or data scope materially expands.
 
 Do not create a duplicate run containing copied classical models, OOF
 predictions, plots, fixtures, or reports. If the contract differs, create a new

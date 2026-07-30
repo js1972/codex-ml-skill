@@ -69,12 +69,17 @@ experiment plan for explicit approval:
 - classical candidate families, minimum coverage, time, and Optuna trials;
 - AutoGluon choice, preset, time, and disk budget;
 - SAP RPT choice, context rows, context-plus-query request rows, query rows per
-  call, columns, request/retry/timeout budget, and access route;
+  call, columns, request/retry/timeout budget, access route, named destination,
+  and transferred data scope;
 - operational constraints used to recommend a winner.
 
 “Train the best model” does not silently mean “run a few classical models and
 ignore the optional systems.” The skill recommends a choice for each track and
-waits for the user to confirm or change it.
+waits for the user to confirm or change it. It uses the host's structured
+question tool when available and never requires a typed approval sentence. If
+SAP RPT is selected, this one approval includes its disclosed remote transfer;
+there is no second RPT confirmation unless the destination or data scope later
+expands materially.
 
 ## Three execution tracks
 

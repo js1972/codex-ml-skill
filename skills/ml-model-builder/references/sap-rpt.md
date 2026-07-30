@@ -54,7 +54,9 @@ Include SAP RPT in the mandatory experiment approval. Present:
 - data sent to the remote service.
 
 Do not infer exclusion from “train the best model.” Recommend whether to include
-RPT and ask for confirmation.
+RPT in the consolidated experiment approval. If the user explicitly requested
+RPT, treat the include/decline decision as already answered and show RPT as
+selected.
 
 When the internal CLI is selected:
 
@@ -68,11 +70,19 @@ When the internal CLI is selected:
 5. Do not provision BTP, AI Core, service keys, or an RPT deployment for this
    route; the CLI handles access under the hood.
 
-Before the first request, obtain explicit confirmation that the named features,
-labels, and query rows may be sent to the named endpoint. Pause only this track
-when setup or transfer approval is missing. Record this as a structured
+Include the named endpoint and feature/label/query/identifier transfer scope in
+the single consolidated experiment approval. That approval covers the first
+and subsequent requests within the disclosed scope; do not ask a second
+RPT-specific confirmation. Pause only this track when setup or consolidated
+transfer approval is missing. Ask again only if the destination, purpose,
+fields, sensitivity, or row volume materially expands, or an independent
+external policy requires it.
+
+Record the consolidated permission as a structured
 `approval.remote_transfers` entry and reference its ID from
-`backends.sap_rpt.transfer_confirmation`.
+`backends.sap_rpt.transfer_confirmation`. This backend field is execution
+evidence that the request matched the approved scope, not evidence of a second
+user prompt.
 
 ## When to use
 

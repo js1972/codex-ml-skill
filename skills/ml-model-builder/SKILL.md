@@ -161,20 +161,37 @@ starting any backend, present a concise execution plan containing:
   wall-time, and Optuna-trial budget;
 - AutoGluon track: include/decline, preset, wall-time, and disk budget;
 - SAP RPT track: include/decline, model/access route, context-row,
-  total-request-row, query-batch-row, column, request/retry/timeout budget;
+  total-request-row, query-batch-row, column, request/retry/timeout budget,
+  named remote destination, and transferred feature/label/query/identifier
+  scope;
 - operational constraints used to select a winner.
 
-Require explicit user confirmation. “Train the best model” does not authorize
-silently omitting AutoGluon or SAP RPT; recommend a choice for each track and
-ask the user to approve or change it. Record the four confirmed experiment
-semantics as true booleans under `approval.scope` and the choice/budget for
-all three tracks under `approval.tracks`. Initialize structured
+Use the host's native structured question tool for this approval whenever it
+is available, such as Codex `request_user_input` or Claude Code
+`AskUserQuestion`. Offer a concise recommended approval option and alternatives
+to change the plan; never require the user to type an exact sentence or magic
+phrase. If no structured tool is exposed, accept a normal semantic yes/no or
+requested changes.
+
+Require one explicit user approval for the consolidated plan. “Train the best
+model” does not authorize silently omitting AutoGluon or SAP RPT; recommend a
+choice for each track and ask the user to approve or change it. When the user
+already explicitly requested SAP RPT, treat its include/decline choice as
+answered and show it as selected. The consolidated approval covers the named
+RPT destination and disclosed data-transfer scope; do not ask for a second RPT
+confirmation before sending the first request.
+
+Record the four confirmed experiment semantics as true booleans under
+`approval.scope` and the choice/budget for all three tracks under
+`approval.tracks`. Initialize structured
 `approval.amendments` and `approval.remote_transfers` lists. Record later
 approved plan changes and remote-data permissions there, not only in narrative
 notes. Do not execute any track until approval is received.
 
-Obtain any additional remote-data-transfer confirmation required by the SAP
-RPT route before its first request.
+Ask another structured approval question only if the RPT destination or
+transferred feature, label, query-row, identifier, sensitivity, or volume scope
+materially expands beyond the consolidated approval, or an external policy
+independently requires it.
 
 ### 4. Freeze evaluation boundaries
 

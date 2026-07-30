@@ -389,6 +389,11 @@ RPT transfer with a unique ID, approval time, backend, destination, purpose,
 and structured feature/label/query/identifier scope. Reference the transfer ID
 from `backends.sap_rpt.transfer_confirmation.approval_id`.
 
+Populate the RPT transfer record from the single consolidated experiment
+approval. Do not require a standalone second confirmation before the first RPT
+request. `transfer_confirmation` records execution checks against that approved
+scope; it does not imply another user prompt.
+
 Every approved budget records positive `cpu_count`, `parallel_jobs`, and
 `memory_gb`, plus boolean `gpu_enabled`. Additionally require:
 
