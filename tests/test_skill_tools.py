@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "skills" / "ml-model-builder" / "scripts"
 INSPECT_SCRIPT = SCRIPTS / "inspect_model_data.py"
 REPORT_SCRIPT = SCRIPTS / "render_report.py"
+AUTOGLUON_CHECK_SCRIPT = SCRIPTS / "check_autogluon_compatibility.py"
 
 
 class ApprovalGuidanceTests(unittest.TestCase):
@@ -50,6 +52,130 @@ class ApprovalGuidanceTests(unittest.TestCase):
         self.assertIn("one structured question invocation", governance)
         self.assertIn("do not ask a second rpt-specific confirmation", sap_rpt)
         self.assertNotIn("obtain a second explicit confirmation", governance)
+
+
+class AutoGluonCompatibilityTests(unittest.TestCase):
+    @staticmethod
+    def write_distribution(root: Path, name: str, version: str) -> None:
+        normalized = name.replace("-", "_").replace(".", "_")
+        metadata_dir = root / f"{normalized}-{version}.dist-info"
+        metadata_dir.mkdir()
+        (metadata_dir / "METADATA").write_text(
+            f"Metadata-Version: 2.4\nName: {name}\nVersion: {version}\n",
+            encoding="utf-8",
+        )
+
+    def write_conventional_neural_environment(
+        self,
+        root: Path,
+        *,
+        fastcore_has_starmap: bool,
+    ) -> None:
+        for name, version in (
+            ("autogluon.tabular", "1.5.0"),
+            ("fastai", "2.8.7"),
+            ("fastcore", "2.1.13" if not fastcore_has_starmap else "1.8.16"),
+            ("torch", "2.9.1"),
+        ):
+            self.write_distribution(root, name, version)
+
+        fastai = root / "fastai"
+        fastai.mkdir()
+        (fastai / "__init__.py").write_text("", encoding="utf-8")
+        (fastai / "optimizer.py").write_text(
+            "def set_hypers(self, **kwargs):\n"
+            "    L(kwargs.items()).starmap(self.set_hyper)\n",
+            encoding="utf-8",
+        )
+
+        fastcore = root / "fastcore"
+        fastcore.mkdir()
+        (fastcore / "__init__.py").write_text("", encoding="utf-8")
+        starmap = (
+            "\n"
+            "    def starmap(self, function):\n"
+            "        return L(function(*item) for item in self.items)\n"
+            if fastcore_has_starmap
+            else ""
+        )
+        (fastcore / "foundation.py").write_text(
+            "class L:\n"
+            "    def __init__(self, items):\n"
+            "        self.items = list(items)\n"
+            f"{starmap}",
+            encoding="utf-8",
+        )
+
+    def run_check(
+        self, environment: Path, *extra: str
+    ) -> subprocess.CompletedProcess[str]:
+        process_environment = os.environ.copy()
+        process_environment["PYTHONPATH"] = str(environment)
+        return subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-S",
+                str(AUTOGLUON_CHECK_SCRIPT),
+                *extra,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=process_environment,
+        )
+
+    def test_detects_fastcore_v2_break_before_autogluon_fit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            environment = Path(tmp)
+            self.write_conventional_neural_environment(
+                environment,
+                fastcore_has_starmap=False,
+            )
+
+            completed = self.run_check(
+                environment,
+                "--preset",
+                "best_quality",
+            )
+
+            self.assertEqual(completed.returncode, 2, completed.stderr)
+            self.assertIn("conventional-neural-fastai: incompatible", completed.stdout)
+            self.assertIn("fastcore<2", completed.stdout)
+            self.assertIn("overall: action_required", completed.stdout)
+
+    def test_accepts_compatible_fastai_and_fastcore_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            environment = Path(tmp)
+            self.write_conventional_neural_environment(
+                environment,
+                fastcore_has_starmap=True,
+            )
+
+            completed = self.run_check(
+                environment,
+                "--preset",
+                "best_quality",
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+            self.assertIn("conventional-neural-fastai: ready", completed.stdout)
+            self.assertIn("overall: ready", completed.stdout)
+
+    def test_skill_requires_fastai_compatibility_preflight(self) -> None:
+        skill = (
+            REPO_ROOT / "skills/ml-model-builder/SKILL.md"
+        ).read_text(encoding="utf-8")
+        automl = (
+            REPO_ROOT / "skills/ml-model-builder/references/automl.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("check_autogluon_compatibility.py", skill)
+        self.assertIn("fastcore<2", automl)
+        self.assertIn("`extreme_quality`", automl)
+        self.assertIn("CPU-only work laptop", automl)
+        self.assertIn("FastAI dependency preflight", automl)
+        self.assertIn("Do not silently continue", automl)
 
 
 class ModelingPreflightTests(unittest.TestCase):

@@ -462,10 +462,18 @@ and run cold-start root inference in a fresh subprocess. Point
 
 Record its preset, run mode, optional time limit, runtime estimate,
 completion status, fold-fitting strategy/reason, result, native leaderboard,
-structured internal-failure list, runtime thread limits,
+dependency-preflight result and approved compatibility resolutions, structured
+internal-failure list, runtime thread limits,
 prediction-equivalence evidence, final predictor bytes, and peak packaging
 disk bytes. Do not describe a `time_limit_reached` result as best without
-qualifying that it is the best found within the approved limit. Require:
+qualifying that it is the best found within the approved limit.
+
+Store the FastAI check under `build.dependency_preflight` with its status,
+interpreter, detected AutoGluon/FastAI/Fastcore/Torch versions, and any approved
+resolution. A completed build whose proposed roster included FastAI must record
+the preflight as passed.
+
+Require:
 
 ```json
 {

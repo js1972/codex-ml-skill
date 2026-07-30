@@ -254,6 +254,12 @@ AutoGluon own its preprocessing, model construction, tuning, and ensembling.
 Do not put it inside external Optuna or feed it the classical transformed
 matrix.
 
+When the selected preset includes FastAI, pass it through
+`scripts/check_autogluon_compatibility.py` using the target project interpreter
+before fitting. Resolve every disclosed and approved compatibility action,
+then require the check to pass. Do not accept a known FastAI/Fastcore API
+mismatch as routine model-family attrition.
+
 When `parallel_jobs=1`, set AutoGluon's fold fitting strategy to
 `sequential_local` and record the reason. Capture the native leaderboard and a
 structured internal-failure ledger; an internal model failure does not make a
@@ -377,7 +383,8 @@ against previously opened final evidence while claiming a new unbiased result.
       classical preprocessing.
 - [ ] Keep AutoGluon autonomous and outside external Optuna/classical
       preprocessing; default best-model requests to run-to-completion, package
-      a prediction-equivalent deployment clone, and test cold-start inference.
+      a prediction-equivalent deployment clone, test cold-start inference, and
+      verify FastAI dependency compatibility before fitting.
 - [ ] Treat SAP RPT as pretrained; package context/query data without training
       artifacts or training terminology.
 - [ ] Compare approved tracks on shared evaluation boundaries and metric code.

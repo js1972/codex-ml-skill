@@ -4,6 +4,7 @@
 
 - [Role](#role)
 - [Approval and inputs](#approval-and-inputs)
+- [FastAI dependency preflight](#fastai-dependency-preflight)
 - [Fair evaluation](#fair-evaluation)
 - [Execution](#execution)
 - [Selection and serving](#selection-and-serving)
@@ -29,6 +30,12 @@ Do not:
 “Raw” means the source-valued eligible feature columns after mandatory removal
 of target sources, post-outcome fields, identifiers not intended as features,
 and prohibited data. It does not permit leakage or invalid dtypes/semantics.
+
+AutoGluon also offers tabular foundation models through its GPU-oriented
+`extreme_quality` route. That route requires an available CUDA GPU and is not a
+useful local option on a CPU-only work laptop; use the standard portfolio
+instead. Do not add foundation-model dependency or approval machinery to a
+CPU-only run.
 
 ## Approval and inputs
 
@@ -61,6 +68,37 @@ decline when the task requires a different AutoGluon API, the data cannot
 support the evaluation design, or the installed release cannot honor the
 approved split and metric semantics.
 
+## FastAI dependency preflight
+
+When the proposed preset includes FastAI, run the read-only helper before
+approval with the interpreter intended for AutoGluon:
+
+```text
+<project-python> scripts/check_autogluon_compatibility.py \
+  --preset <proposed-preset>
+```
+
+The helper fits no model. It verifies that AutoGluon's FastAI neural-network
+family has a compatible FastAI, Fastcore, and Torch environment.
+
+Fastcore 2 removed `L.starmap`. Some FastAI releases accepted by AutoGluon's
+package range still call that API, causing every `NeuralNetFastAI` candidate
+to fail after the long build has started. When the helper detects that exact
+combination:
+
+1. disclose a temporary `fastcore<2` compatibility constraint in the
+   consolidated approval;
+2. after approval, resolve the environment without editing installed package
+   source or monkey-patching the runtime;
+3. rerun the helper and require `overall: ready` before `fit`;
+4. prefer a newer supported FastAI release once it removes the legacy call,
+   then remove the temporary constraint only after the helper passes.
+
+Do not silently continue from a known preflight incompatibility when the
+selected preset includes FastAI. If an unforeseen model failure still occurs
+after a passing preflight, let unaffected AutoGluon families continue and
+record the resulting coverage gap.
+
 ## Fair evaluation
 
 Use the same:
@@ -90,6 +128,7 @@ Let AutoGluon manage its own pipeline. Record:
 - preset, run mode, optional time limit, resource limits, and dynamic-stacking
   settings;
 - included/excluded internal model families when constrained;
+- dependency-preflight result and any approved compatibility resolution;
 - fold IDs and row counts supplied;
 - native leaderboard summary;
 - failures, elapsed time, peak memory, and disk usage when measurable;
@@ -125,7 +164,9 @@ internal component, record:
 
 An internal model failure does not make the whole AutoGluon track failed when
 other constituent models complete and a valid predictor is produced. Include
-the ledger in `run.json`, `report.html`, and `results.md`.
+the ledger in `run.json`, `report.html`, and `results.md`. It does, however,
+make an approved family-coverage claim incomplete when no candidate from that
+expected family completed; state that gap explicitly.
 
 Do not describe a time-limited result as the best model without the qualifier
 “within the approved time limit.” For run-to-completion, report that the
