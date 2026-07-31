@@ -497,9 +497,38 @@ def validate_handoff_content(
                             f"component {component!r}"
                         )
         if "sap_rpt" in backends:
-            for concept in ("context", "access", "latency"):
-                if concept not in text:
+            concepts = {
+                "context": ("context",),
+                "access": ("access",),
+                "latency": ("latency",),
+                "model ID": ("model id", "model_id"),
+                "retrieval": ("retrieval", "vectorsearch", "random::"),
+                "configuration coverage": (
+                    "approved configurations",
+                    "configuration ledger",
+                ),
+            }
+            for concept, alternatives in concepts.items():
+                if not any(alternative in text for alternative in alternatives):
                     errors.append(f"{name}: must include the SAP RPT {concept} details")
+            configurations = nested(backends, "sap_rpt", "configurations")
+            if isinstance(configurations, list):
+                model_ids = {
+                    configuration.get("model_id")
+                    for configuration in configurations
+                    if isinstance(configuration, dict)
+                    and is_nonempty_string(configuration.get("model_id"))
+                }
+                for model_id in model_ids:
+                    normalized_model_id = re.sub(
+                        r"[\s_-]+",
+                        " ",
+                        model_id.lower(),
+                    ).strip()
+                    if normalized_model_id not in text:
+                        errors.append(
+                            f"{name}: must include SAP RPT model ID {model_id!r}"
+                        )
 
 
 def validate_requirements(path: Path, errors: list[str]) -> None:
@@ -883,6 +912,126 @@ def _validate_budget(
             )
 
 
+def _validate_rpt_plan(
+    plan: Any,
+    budget: Any,
+    errors: list[str],
+) -> None:
+    field = "run.json: approval.tracks.sap_rpt.plan"
+    if not require(
+        isinstance(plan, dict) and bool(plan),
+        f"{field} must be a non-empty object for an approved SAP RPT track",
+        errors,
+    ):
+        return
+    validate_known_keys(
+        plan,
+        {
+            "model_ids",
+            "full_context_fits",
+            "use_full_context_when_supported",
+            "context_size_candidates",
+            "retrieval_strategies",
+            "context_seed",
+            "input_format",
+            "retrieval_extra_status",
+            "estimated_configurations",
+        },
+        field,
+        errors,
+    )
+    require(
+        is_string_list(plan.get("model_ids"), nonempty=True),
+        f"{field}.model_ids must be a non-empty unique string list",
+        errors,
+    )
+    require(
+        isinstance(plan.get("full_context_fits"), bool),
+        f"{field}.full_context_fits must be boolean",
+        errors,
+    )
+    require(
+        plan.get("use_full_context_when_supported") is True,
+        f"{field}.use_full_context_when_supported must be true",
+        errors,
+    )
+    sizes = plan.get("context_size_candidates")
+    valid_sizes = (
+        isinstance(sizes, list)
+        and bool(sizes)
+        and all(is_positive_integer(value) for value in sizes)
+        and len(sizes) == len(set(sizes))
+    )
+    require(
+        valid_sizes,
+        f"{field}.context_size_candidates must be a non-empty unique list of "
+        "positive integers",
+        errors,
+    )
+    if valid_sizes and isinstance(budget, dict):
+        maximum = budget.get("max_context_rows")
+        if is_positive_integer(maximum):
+            require(
+                max(sizes) <= maximum,
+                f"{field}.context_size_candidates cannot exceed the approved "
+                "max_context_rows",
+                errors,
+            )
+    strategies = plan.get("retrieval_strategies")
+    valid_strategies = is_string_list(strategies, nonempty=True) and set(
+        strategies
+    ).issubset({"full", "random", "vectorsearch"})
+    require(
+        valid_strategies,
+        f"{field}.retrieval_strategies must be a non-empty unique subset of "
+        "full, random, and vectorsearch",
+        errors,
+    )
+    if valid_strategies and plan.get("full_context_fits") is True:
+        require(
+            "full" in strategies,
+            f"{field}.retrieval_strategies must include full when full context "
+            "fits",
+            errors,
+        )
+    if valid_strategies and plan.get("full_context_fits") is False:
+        require(
+            "random" in strategies,
+            f"{field}.retrieval_strategies must include random when full "
+            "context does not fit",
+            errors,
+        )
+    require(
+        is_nonnegative_integer(plan.get("context_seed")),
+        f"{field}.context_seed must be a non-negative integer",
+        errors,
+    )
+    require(
+        plan.get("input_format") in {"column_json", "csv", "parquet"},
+        f"{field}.input_format must be column_json, csv, or parquet",
+        errors,
+    )
+    extra_status = plan.get("retrieval_extra_status")
+    require(
+        extra_status
+        in {"installed", "approved_install", "unavailable", "not_required"},
+        f"{field}.retrieval_extra_status is invalid",
+        errors,
+    )
+    if valid_strategies and "vectorsearch" in strategies:
+        require(
+            extra_status in {"installed", "approved_install"},
+            f"{field}.retrieval_extra_status must be installed or "
+            "approved_install when vectorsearch is planned",
+            errors,
+        )
+    require(
+        is_positive_integer(plan.get("estimated_configurations")),
+        f"{field}.estimated_configurations must be a positive integer",
+        errors,
+    )
+
+
 def _validate_approval_amendments(
     amendments: Any,
     errors: list[str],
@@ -1140,9 +1289,12 @@ def validate_approval(
         )
         if not isinstance(track, dict):
             continue
+        allowed_track_fields = {"selected", "status", "budget"}
+        if backend == "sap_rpt":
+            allowed_track_fields.add("plan")
         validate_known_keys(
             track,
-            {"selected", "status", "budget"},
+            allowed_track_fields,
             f"run.json: approval.tracks.{backend}",
             errors,
         )
@@ -1161,6 +1313,8 @@ def validate_approval(
         if chosen is True:
             selected.add(backend)
             _validate_budget(backend, track.get("budget"), errors)
+            if backend == "sap_rpt":
+                _validate_rpt_plan(track.get("plan"), track.get("budget"), errors)
         else:
             require(
                 track.get("budget") in (None, {}),
@@ -1168,6 +1322,13 @@ def validate_approval(
                 "empty when declined",
                 errors,
             )
+            if backend == "sap_rpt":
+                require(
+                    track.get("plan") in (None, {}),
+                    "run.json: approval.tracks.sap_rpt.plan must be null or "
+                    "empty when declined",
+                    errors,
+                )
     require(
         bool(selected),
         "run.json: approval must select at least one modeling track",
@@ -1835,10 +1996,444 @@ def validate_autogluon(
             )
 
 
+def _validate_rpt_configurations(
+    value: dict[str, Any],
+    model: Any,
+    context: Any,
+    approved_plan: Any,
+    approved_budget: Any,
+    errors: list[str],
+) -> None:
+    field = "run.json: backends.sap_rpt.configurations"
+    configurations = value.get("configurations")
+    if not require(
+        isinstance(configurations, list) and bool(configurations),
+        f"{field} must be a non-empty list",
+        errors,
+    ):
+        return
+    if isinstance(approved_plan, dict):
+        expected_count = approved_plan.get("estimated_configurations")
+        if is_positive_integer(expected_count):
+            require(
+                len(configurations) == expected_count,
+                f"{field} must contain one row for every approved estimated "
+                "configuration",
+                errors,
+            )
+
+    identifiers: list[str] = []
+    selected_rows: list[dict[str, Any]] = []
+    completed_rows: list[dict[str, Any]] = []
+    allowed_keys = {
+        "id",
+        "status",
+        "model_id",
+        "context_candidate_rows",
+        "context_rows_planned",
+        "context_rows_sent",
+        "context_strategy",
+        "cli_strategy",
+        "context_seed",
+        "input_format",
+        "fold_eligibility_policy",
+        "score",
+        "latency_ms",
+        "throughput_queries_per_second",
+        "request_count",
+        "retrieval_extra_used",
+        "selected",
+        "failure_reason",
+    }
+    planned_models = (
+        set(approved_plan.get("model_ids", []))
+        if isinstance(approved_plan, dict)
+        else set()
+    )
+    planned_strategies = (
+        set(approved_plan.get("retrieval_strategies", []))
+        if isinstance(approved_plan, dict)
+        else set()
+    )
+    planned_format = (
+        approved_plan.get("input_format")
+        if isinstance(approved_plan, dict)
+        else None
+    )
+    planned_seed = (
+        approved_plan.get("context_seed")
+        if isinstance(approved_plan, dict)
+        else None
+    )
+    maximum_context = (
+        approved_budget.get("max_context_rows")
+        if isinstance(approved_budget, dict)
+        else None
+    )
+
+    for index, configuration in enumerate(configurations):
+        prefix = f"{field}[{index}]"
+        if not require(
+            isinstance(configuration, dict),
+            f"{prefix} must be an object",
+            errors,
+        ):
+            continue
+        validate_known_keys(configuration, allowed_keys, prefix, errors)
+        identifier = configuration.get("id")
+        require(
+            is_nonempty_string(identifier),
+            f"{prefix}.id must be non-empty",
+            errors,
+        )
+        if is_nonempty_string(identifier):
+            identifiers.append(identifier)
+        status = configuration.get("status")
+        require(
+            status in {"completed", "failed", "skipped", "unavailable"},
+            f"{prefix}.status must be completed, failed, skipped, or unavailable",
+            errors,
+        )
+        model_id = configuration.get("model_id")
+        require(
+            is_nonempty_string(model_id),
+            f"{prefix}.model_id must be non-empty",
+            errors,
+        )
+        if planned_models and is_nonempty_string(model_id):
+            require(
+                model_id in planned_models,
+                f"{prefix}.model_id was not included in the approved RPT plan",
+                errors,
+            )
+        candidate_rows = configuration.get("context_candidate_rows")
+        planned_rows = configuration.get("context_rows_planned")
+        sent_rows = configuration.get("context_rows_sent")
+        require(
+            is_positive_integer(candidate_rows),
+            f"{prefix}.context_candidate_rows must be a positive integer",
+            errors,
+        )
+        require(
+            is_positive_integer(planned_rows),
+            f"{prefix}.context_rows_planned must be a positive integer",
+            errors,
+        )
+        require(
+            is_nonnegative_integer(sent_rows),
+            f"{prefix}.context_rows_sent must be a non-negative integer",
+            errors,
+        )
+        if is_positive_integer(candidate_rows) and is_positive_integer(planned_rows):
+            require(
+                planned_rows <= candidate_rows,
+                f"{prefix}.context_rows_planned cannot exceed "
+                "context_candidate_rows",
+                errors,
+            )
+        if is_positive_integer(planned_rows) and is_positive_integer(maximum_context):
+            require(
+                planned_rows <= maximum_context,
+                f"{prefix}.context_rows_planned exceeds the approved "
+                "max_context_rows",
+                errors,
+            )
+        strategy = configuration.get("context_strategy")
+        require(
+            strategy in {"full", "random", "vectorsearch"},
+            f"{prefix}.context_strategy must be full, random, or vectorsearch",
+            errors,
+        )
+        if planned_strategies and strategy in {"full", "random", "vectorsearch"}:
+            require(
+                strategy in planned_strategies,
+                f"{prefix}.context_strategy was not included in the approved "
+                "RPT plan",
+                errors,
+            )
+        if (
+            strategy == "full"
+            and is_positive_integer(candidate_rows)
+            and is_positive_integer(planned_rows)
+        ):
+            require(
+                planned_rows == candidate_rows,
+                f"{prefix}: full context must plan every candidate row",
+                errors,
+            )
+            require(
+                configuration.get("cli_strategy") is None,
+                f"{prefix}.cli_strategy must be null for full context",
+                errors,
+            )
+            require(
+                configuration.get("context_seed") is None,
+                f"{prefix}.context_seed must be null for full context",
+                errors,
+            )
+        elif strategy in {"random", "vectorsearch"}:
+            if is_positive_integer(candidate_rows) and is_positive_integer(
+                planned_rows
+            ):
+                require(
+                    planned_rows < candidate_rows,
+                    f"{prefix}: a retrieval strategy must reduce context rows",
+                    errors,
+                )
+                require(
+                    configuration.get("cli_strategy")
+                    == f"{strategy}::{planned_rows}",
+                    f"{prefix}.cli_strategy must match "
+                    f"{strategy}::context_rows_planned",
+                    errors,
+                )
+            require(
+                configuration.get("context_seed") == planned_seed,
+                f"{prefix}.context_seed must match the approved RPT plan",
+                errors,
+            )
+        input_format = configuration.get("input_format")
+        require(
+            input_format in {"column_json", "csv", "parquet"},
+            f"{prefix}.input_format must be column_json, csv, or parquet",
+            errors,
+        )
+        if planned_format is not None:
+            require(
+                input_format == planned_format,
+                f"{prefix}.input_format must match the approved RPT plan",
+                errors,
+            )
+        require(
+            is_nonempty_string(configuration.get("fold_eligibility_policy")),
+            f"{prefix}.fold_eligibility_policy must be non-empty",
+            errors,
+        )
+        require(
+            isinstance(configuration.get("retrieval_extra_used"), bool),
+            f"{prefix}.retrieval_extra_used must be boolean",
+            errors,
+        )
+        if strategy == "vectorsearch":
+            require(
+                configuration.get("retrieval_extra_used") is True,
+                f"{prefix}.retrieval_extra_used must be true for vectorsearch",
+                errors,
+            )
+        elif strategy in {"full", "random"}:
+            require(
+                configuration.get("retrieval_extra_used") is False,
+                f"{prefix}.retrieval_extra_used must be false for {strategy}",
+                errors,
+            )
+        require(
+            isinstance(configuration.get("selected"), bool),
+            f"{prefix}.selected must be boolean",
+            errors,
+        )
+        request_count = configuration.get("request_count")
+        require(
+            is_nonnegative_integer(request_count),
+            f"{prefix}.request_count must be a non-negative integer",
+            errors,
+        )
+        if status == "completed":
+            completed_rows.append(configuration)
+            require(
+                sent_rows == planned_rows,
+                f"{prefix}.context_rows_sent must match context_rows_planned "
+                "when completed",
+                errors,
+            )
+            require(
+                is_finite_number(configuration.get("score")),
+                f"{prefix}.score must be finite when completed",
+                errors,
+            )
+            require(
+                is_positive_integer(request_count),
+                f"{prefix}.request_count must be positive when completed",
+                errors,
+            )
+            require(
+                configuration.get("failure_reason") in (None, ""),
+                f"{prefix}.failure_reason must be null when completed",
+                errors,
+            )
+            latency = configuration.get("latency_ms")
+            if require(
+                isinstance(latency, dict),
+                f"{prefix}.latency_ms must be an object when completed",
+                errors,
+            ):
+                validate_known_keys(
+                    latency,
+                    {"median", "p95"},
+                    f"{prefix}.latency_ms",
+                    errors,
+                )
+                median = latency.get("median")
+                p95 = latency.get("p95")
+                require(
+                    is_finite_number(median) and float(median) >= 0,
+                    f"{prefix}.latency_ms.median must be non-negative and finite",
+                    errors,
+                )
+                require(
+                    is_finite_number(p95) and float(p95) >= 0,
+                    f"{prefix}.latency_ms.p95 must be non-negative and finite",
+                    errors,
+                )
+                if is_finite_number(median) and is_finite_number(p95):
+                    require(
+                        float(p95) >= float(median),
+                        f"{prefix}.latency_ms.p95 cannot be below median",
+                        errors,
+                    )
+            throughput = configuration.get("throughput_queries_per_second")
+            require(
+                is_finite_number(throughput) and float(throughput) > 0,
+                f"{prefix}.throughput_queries_per_second must be positive and "
+                "finite when completed",
+                errors,
+            )
+        else:
+            require(
+                is_nonempty_string(configuration.get("failure_reason")),
+                f"{prefix}.failure_reason must be non-empty when not completed",
+                errors,
+            )
+        if configuration.get("selected") is True:
+            require(
+                status == "completed",
+                f"{prefix}: only a completed configuration may be selected",
+                errors,
+            )
+            selected_rows.append(configuration)
+
+    observed_models = {
+        row.get("model_id")
+        for row in configurations
+        if isinstance(row, dict)
+    }
+    observed_strategies = {
+        row.get("context_strategy")
+        for row in configurations
+        if isinstance(row, dict)
+    }
+    observed_sizes = {
+        row.get("context_rows_planned")
+        for row in configurations
+        if isinstance(row, dict)
+    }
+    if isinstance(approved_plan, dict):
+        require(
+            set(approved_plan.get("model_ids", [])) <= observed_models,
+            f"{field} must record every model ID in the approved RPT plan",
+            errors,
+        )
+        require(
+            set(approved_plan.get("retrieval_strategies", []))
+            <= observed_strategies,
+            f"{field} must record every retrieval strategy in the approved "
+            "RPT plan",
+            errors,
+        )
+        require(
+            set(approved_plan.get("context_size_candidates", []))
+            <= observed_sizes,
+            f"{field} must record every context size in the approved RPT plan",
+            errors,
+        )
+    if len(identifiers) != len(set(identifiers)):
+        errors.append(f"{field} IDs must be unique")
+    require(
+        len(selected_rows) == 1,
+        f"{field} must select exactly one completed configuration",
+        errors,
+    )
+    if len(selected_rows) == 1:
+        selected = selected_rows[0]
+        if isinstance(model, dict):
+            require(
+                model.get("id") == selected.get("model_id"),
+                "run.json: backends.sap_rpt.model.id must match the selected "
+                "configuration model_id",
+                errors,
+            )
+        if isinstance(context, dict):
+            require(
+                context.get("selected_configuration_id") == selected.get("id"),
+                "run.json: backends.sap_rpt.context.selected_configuration_id "
+                "must reference the selected configuration",
+                errors,
+            )
+
+    coverage = value.get("evaluation_coverage")
+    coverage_field = "run.json: backends.sap_rpt.evaluation_coverage"
+    if not require(
+        isinstance(coverage, dict),
+        f"{coverage_field} must be an object",
+        errors,
+    ):
+        return
+    validate_known_keys(
+        coverage,
+        {
+            "summary",
+            "context_scale_tested",
+            "retrieval_comparison_tested",
+            "model_variants_tested",
+            "full_context_tested",
+            "coverage_gaps",
+        },
+        coverage_field,
+        errors,
+    )
+    require(
+        isinstance(coverage.get("summary"), str)
+        and "evaluated under the approved configurations"
+        in coverage["summary"].lower(),
+        f"{coverage_field}.summary must state evaluated under the approved "
+        "configurations",
+        errors,
+    )
+    completed_context_sizes = {
+        row.get("context_rows_planned") for row in completed_rows
+    }
+    completed_strategies = {
+        row.get("context_strategy") for row in completed_rows
+    }
+    completed_models = {row.get("model_id") for row in completed_rows}
+    expected_flags = {
+        "context_scale_tested": len(completed_context_sizes) > 1,
+        "retrieval_comparison_tested": {
+            "random",
+            "vectorsearch",
+        }.issubset(completed_strategies),
+        "model_variants_tested": len(completed_models) > 1,
+        "full_context_tested": "full" in completed_strategies,
+    }
+    for name, expected in expected_flags.items():
+        require(
+            coverage.get(name) is expected,
+            f"{coverage_field}.{name} must match the completed configuration "
+            "ledger",
+            errors,
+        )
+    require(
+        is_string_list(coverage.get("coverage_gaps")),
+        f"{coverage_field}.coverage_gaps must be a unique string list",
+        errors,
+    )
+
+
 def validate_sap_rpt(
     value: dict[str, Any],
     run_dir: Path,
     remote_transfers: dict[str, dict[str, Any]],
+    approved_plan: Any,
+    approved_budget: Any,
     errors: list[str],
 ) -> None:
     reject_sap_rpt_operation_fields(value, errors)
@@ -1852,6 +2447,11 @@ def validate_sap_rpt(
         require(
             is_nonempty_string(model.get("name")),
             "run.json: backends.sap_rpt.model.name must be non-empty",
+            errors,
+        )
+        require(
+            is_nonempty_string(model.get("id")),
+            "run.json: backends.sap_rpt.model.id must be non-empty",
             errors,
         )
         require(
@@ -1911,6 +2511,12 @@ def validate_sap_rpt(
             "run.json: backends.sap_rpt.context.policy must be non-empty",
             errors,
         )
+        require(
+            is_nonempty_string(context.get("selected_configuration_id")),
+            "run.json: backends.sap_rpt.context.selected_configuration_id "
+            "must be non-empty",
+            errors,
+        )
         manifest = resolve_artifact_path(
             run_dir,
             context.get("manifest"),
@@ -1958,6 +2564,14 @@ def validate_sap_rpt(
                 f"{field} must be true",
                 errors,
             )
+    _validate_rpt_configurations(
+        value,
+        model,
+        context,
+        approved_plan,
+        approved_budget,
+        errors,
+    )
 
 
 def reject_sap_rpt_operation_fields(
@@ -2070,7 +2684,21 @@ def validate_backends(
             elif backend == "autogluon":
                 validate_autogluon(value, approved_budget, run_dir, errors)
             else:
-                validate_sap_rpt(value, run_dir, remote_transfers, errors)
+                approved_plan = nested(
+                    document,
+                    "approval",
+                    "tracks",
+                    "sap_rpt",
+                    "plan",
+                )
+                validate_sap_rpt(
+                    value,
+                    run_dir,
+                    remote_transfers,
+                    approved_plan,
+                    approved_budget,
+                    errors,
+                )
         elif backend == "sap_rpt":
             reject_sap_rpt_operation_fields(value, errors)
 

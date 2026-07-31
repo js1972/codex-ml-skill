@@ -128,7 +128,11 @@ Inspect only enough data to validate the experiment. Confirm:
 - environment and resource feasibility for the proposed tracks;
 - read-only dependency and access readiness for every proposed backend, plus
   an AutoGluon runtime range estimated from dataset size, preset, validation
-  design, hardware, and prior local evidence when available.
+  design, hardware, and prior local evidence when available;
+- for SAP RPT, CLI/version readiness, accessible model IDs, deployed context,
+  total-request, query-batch, and column capacities, retrieval-extra
+  availability, whether full fold-valid context fits, the input format, and
+  the proposed model/context/retrieval configuration matrix.
 
 Do not generate exploratory charts or descriptive reports. Do not consume an
 existing EDA report. Use source data and user/domain input only.
@@ -165,7 +169,9 @@ starting any backend, present a concise execution plan containing:
 - AutoGluon track: include/decline, preset, estimated runtime range,
   `run_to_completion` or `time_limited`, optional time limit, and resource/disk
   budget;
-- SAP RPT track: include/decline, model/access route, context-row,
+- SAP RPT track: include/decline, accessible model IDs/access route,
+  full-context or approved truncation plan, context sizes, retrieval
+  strategies and dependency readiness, input format and seed, context-row,
   total-request-row, query-batch-row, column, request/retry/timeout budget,
   named remote destination, and transferred feature/label/query/identifier
   scope;
@@ -279,6 +285,15 @@ SAP AI Core is the paying-customer production route to the same model. Permit
 SAP RPT to be the predictive or operational winner when evidence and
 deployment constraints support it.
 
+Use all fold-valid context rows when they fit the discovered deployment
+limits. If they do not fit, execute the approved adaptive context plan using
+the documented CLI strategies: reproducible `random::N` and, when the
+retrieval extra is available and approved, `vectorsearch::N`. Compare useful
+distinct context sizes ending with the largest permitted/practical context;
+do not impose 512 rows as a default cap. Use Parquet for inputs over 1 MB.
+Select the model ID, context size, and retrieval policy from development
+evidence only, then freeze them before final evaluation.
+
 ### 6. Select and evaluate
 
 Select candidates, thresholds, calibration, forecast strategy, or review
@@ -292,8 +307,10 @@ calibration/threshold behavior when relevant, practical value,
 latency/resource trade-offs, intended/prohibited uses, known limitations, and
 monitoring. Whenever the corresponding backend was approved, include the
 classical baseline/leaderboard, AutoGluon preset, or SAP RPT
-context/access/latency section even if it only records an unavailable or failed
-status. Separate “best predictive result” from “recommended operational
+context/access/latency section and RPT configuration ledger even if it only
+records an unavailable or failed status. Describe RPT as evaluated under the
+approved configurations, identify untested context/retrieval/model-variant
+coverage, and separate “best predictive result” from “recommended operational
 choice” when they differ.
 
 ### 7. Package and verify
@@ -386,7 +403,9 @@ against previously opened final evidence while claiming a new unbiased result.
       a prediction-equivalent deployment clone, test cold-start inference, and
       verify FastAI dependency compatibility before fitting.
 - [ ] Treat SAP RPT as pretrained; package context/query data without training
-      artifacts or training terminology.
+      artifacts or training terminology; use full valid context when it fits,
+      otherwise compare the approved reproducible CLI context strategies and
+      sizes.
 - [ ] Compare approved tracks on shared evaluation boundaries and metric code.
 - [ ] Report baselines, uncertainty, errors, limitations, predictive winner,
       operational recommendation, and exact inference commands.

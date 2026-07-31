@@ -44,9 +44,12 @@ backend.
 Include SAP RPT in the mandatory experiment approval. Present:
 
 - include or decline;
-- RPT model and proposed access route;
+- accessible RPT model IDs and proposed access route;
 - target and eligible features;
-- labelled-context selection and maximum size;
+- whether the full fold-valid labelled context fits; otherwise the distinct
+  context sizes and retrieval strategies to compare;
+- `sap-rpt[retrieval]` readiness and any approved installation;
+- input format and reproducibility seed;
 - maximum context rows, context-plus-query rows per request, query rows per
   call, and transmitted columns;
 - maximum calls/retries, request timeout, CPU count, parallel jobs, GPU flag,
@@ -63,12 +66,25 @@ When the internal CLI is selected:
 1. Check whether `sap-rpt` is available without modifying the environment.
 2. If absent or unconfigured, direct the user to the current private
    `rpt-cli` repository and its installation/configuration instructions.
-3. Keep credentials and interactive authentication user-managed; never
+3. Inspect accessible models with `sap-rpt configure` or the current
+   machine-readable equivalent; never assume standard or large model IDs.
+4. Check whether the retrieval extra imports successfully. If the approved
+   plan needs `vectorsearch` and the extra is absent, disclose the private
+   installation action in the consolidated approval.
+5. Keep credentials and interactive authentication user-managed; never
    request, display, log, or store tokens.
-4. Inspect CLI help/version and perform non-secret readiness checks after the
+6. Inspect CLI help/version and perform non-secret readiness checks after the
    user confirms setup.
-5. Do not provision BTP, AI Core, service keys, or an RPT deployment for this
+7. Do not provision BTP, AI Core, service keys, or an RPT deployment for this
    route; the CLI handles access under the hood.
+
+Run `sap-rpt auth status -o json` during read-only readiness checks. Treat exit
+code 1 as expired authentication and disclose the user-managed
+`sap-rpt auth login` prerequisite before the consolidated approval. For a
+missing model, refresh accessible choices with `sap-rpt configure` or pass the
+approved `-m <model-id>`; never silently substitute another model. These are
+preflight blockers for the RPT track, not reasons to interrupt an otherwise
+approved run after execution starts.
 
 Include the named endpoint and feature/label/query/identifier transfer scope in
 the single consolidated experiment approval. That approval covers the first
@@ -134,8 +150,37 @@ evaluation.
 
 Treat context design as data management, not model training.
 
-Use the full fold-training population when supported. Otherwise create one
-deterministic context per fold:
+Use the full fold-training population when supported. Do not default to 512
+context rows or confuse `max_query_batch_rows` with `max_context_rows`.
+
+If the full context exceeds a deployed or approved limit, compare distinct
+useful sizes on development folds. Use up to 512 and 2,048 rows as diagnostic
+anchors when the available population makes them distinct, and always include
+the largest permitted/practical context. Deduplicate sizes that collapse to
+the same value. These anchors are not universal caps.
+
+Use the RPT CLI's documented context strategies:
+
+- `random::N`: seeded, reproducible uniform context sampling with no retrieval
+  dependency;
+- `vectorsearch::N`: FAISS plus character n-gram hashing, when the retrieval
+  extra is installed and approved;
+- no `--context-strategy`: full eligible context when it fits.
+
+Treat `random::N` as the dependency-free truncation baseline. Compare
+`vectorsearch::N` when it is available and scientifically relevant, but do not
+assume it will win: character n-grams are especially natural for
+identifier-like and categorical values and may be less meaningful for
+predominantly continuous numeric tables. Query rows are preserved by the CLI
+regardless of context strategy.
+
+Create every strategy's candidate population from fold-training rows only.
+Query features may choose neighbors at inference time; query labels and query
+rows must never enter the retrieval corpus. “Predate the query” is mandatory
+when time has real prediction semantics; for IID data without a meaningful
+time axis, enforce fold/group/duplicate isolation instead.
+
+For each resulting context:
 
 - classification: preserve representative priors and include adequate support
   for every evaluated class; record intentional rebalancing;
@@ -146,16 +191,18 @@ deterministic context per fold:
 
 Record context row IDs, order, selector logic, seed, size, class/target support,
 as-of boundary, schema, and SHA-256 fingerprint. Keep the same context for all
-query batches in a fold unless the approved policy explicitly requires
-otherwise.
+query batches in a fold unless query-dependent `vectorsearch` was explicitly
+approved.
 
 Keep identifiers outside model features and use them to verify response
 alignment. Represent numeric-looking codes as categorical/string fields when
 they are not quantities. Do not apply the classical preprocessing pipeline.
 
-Context-policy choices may be compared on development evidence within the
-approved request budget. Do not describe those choices as RPT hyperparameters
-or tune them on final evidence.
+Compare model IDs, context sizes, and retrieval policies on development
+evidence within the approved request budget. Freeze one selected configuration
+before final evaluation; do not multiply final-holdout requests across
+candidate configurations. Do not describe these choices as RPT
+hyperparameters or tune them on final evidence.
 
 ## Response validation
 
@@ -194,6 +241,11 @@ Require `max_context_rows + max_query_batch_rows <= max_request_rows` for the
 planned maximum request. Do not reuse “rows per request” to mean query rows
 only.
 
+Use column-oriented JSON, CSV, or Parquet input for CLI context strategies;
+never use row-oriented `{"rows": [...]}` input with them. Prefer Parquet when
+the input exceeds 1 MB. Parquet improves packaging and transport efficiency;
+it does not override deployed row, column, or request limits.
+
 Calculate planned calls before execution:
 
 ```text
@@ -210,8 +262,12 @@ transfer, enforce `context rows + chunk rows <= max_request_rows` and the
 combining responses. Fail before the first request if the complete operation,
 including allowed retries, would exceed `max_requests`.
 
-Record context/query rows and columns, approximate request bytes, call count,
-failures/retries, wall time, median/p95 latency, and throughput.
+Record one configuration-ledger row for every attempted combination, including
+model/deployment ID, candidate/planned/transmitted context rows, exact CLI
+strategy, seed, input format, fold/time eligibility policy, status/failure
+reason, comparable score, request count, median/p95 latency, throughput, and
+whether it was selected. Also record context/query rows and columns,
+approximate request bytes, failures/retries, and wall time.
 
 Remote results may have limited point-in-time reproducibility. Record:
 
@@ -262,6 +318,14 @@ backends.
 Report SAP RPT in the inclusive comparison table with its development and any
 permitted final metric, uncertainty, context coverage, probability limitations,
 request failures, latency, throughput, and access requirements.
+
+Include the full RPT configuration ledger and explicitly summarize whether
+context scale, retrieval, model variants, and full context were tested. Use
+“evaluated under the approved configurations,” not an unqualified “fully
+evaluated.” When full fold-valid context fits, explain that retrieval
+comparison was unnecessary. When truncation was required, identify any
+available context scale, retrieval strategy, or model variant that was not
+tested.
 
 Permit SAP RPT to be:
 

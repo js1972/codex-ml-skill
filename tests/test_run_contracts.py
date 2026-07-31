@@ -133,7 +133,10 @@ with open(args.output, "w", newline="", encoding="utf-8") as handle:
 
 def track_approval(backend: str, selected: bool) -> dict[str, Any]:
     if not selected:
-        return {"selected": False, "status": "declined", "budget": None}
+        track = {"selected": False, "status": "declined", "budget": None}
+        if backend == "sap_rpt":
+            track["plan"] = None
+        return track
     shared = {
         "cpu_count": 4,
         "memory_gb": 8,
@@ -164,19 +167,32 @@ def track_approval(backend: str, selected: bool) -> dict[str, Any]:
         "sap_rpt": {
             **shared,
             "max_requests": 20,
-            "max_context_rows": 512,
-            "max_request_rows": 640,
-            "max_query_batch_rows": 64,
+            "max_context_rows": 5200,
+            "max_request_rows": 5700,
+            "max_query_batch_rows": 500,
             "max_columns": 20,
             "max_retries": 2,
             "timeout_seconds": 120,
         },
     }
-    return {
+    track = {
         "selected": True,
         "status": "approved",
         "budget": budgets[backend],
     }
+    if backend == "sap_rpt":
+        track["plan"] = {
+            "model_ids": ["rpt-standard", "rpt-large"],
+            "full_context_fits": True,
+            "use_full_context_when_supported": True,
+            "context_size_candidates": [2048, 5197],
+            "retrieval_strategies": ["full", "random", "vectorsearch"],
+            "context_seed": 0,
+            "input_format": "parquet",
+            "retrieval_extra_status": "installed",
+            "estimated_configurations": 3,
+        }
+    return track
 
 
 def backend_evaluation(backend: str) -> dict[str, Any]:
@@ -304,6 +320,7 @@ def create_backend(run_dir: Path, backend: str) -> dict[str, Any]:
         **common,
         "model": {
             "name": "SAP RPT",
+            "id": "rpt-large",
             "version": "2026-07",
             "production_capable": True,
         },
@@ -316,6 +333,77 @@ def create_backend(run_dir: Path, backend: str) -> dict[str, Any]:
             "manifest": "backends/sap_rpt/context_manifest.json",
             "fingerprint": FINGERPRINTS["context"],
             "policy": "frozen labelled context reconstructed for inference",
+            "selected_configuration_id": "rpt-large-full",
+        },
+        "configurations": [
+            {
+                "id": "rpt-standard-random-2048",
+                "status": "completed",
+                "model_id": "rpt-standard",
+                "context_candidate_rows": 5197,
+                "context_rows_planned": 2048,
+                "context_rows_sent": 2048,
+                "context_strategy": "random",
+                "cli_strategy": "random::2048",
+                "context_seed": 0,
+                "input_format": "parquet",
+                "fold_eligibility_policy": "fold-training rows only",
+                "score": 0.79,
+                "latency_ms": {"median": 3100, "p95": 3800},
+                "throughput_queries_per_second": 118.4,
+                "request_count": 6,
+                "retrieval_extra_used": False,
+                "selected": False,
+                "failure_reason": None,
+            },
+            {
+                "id": "rpt-standard-vectorsearch-2048",
+                "status": "completed",
+                "model_id": "rpt-standard",
+                "context_candidate_rows": 5197,
+                "context_rows_planned": 2048,
+                "context_rows_sent": 2048,
+                "context_strategy": "vectorsearch",
+                "cli_strategy": "vectorsearch::2048",
+                "context_seed": 0,
+                "input_format": "parquet",
+                "fold_eligibility_policy": "fold-training retrieval corpus only",
+                "score": 0.80,
+                "latency_ms": {"median": 3300, "p95": 4100},
+                "throughput_queries_per_second": 112.2,
+                "request_count": 6,
+                "retrieval_extra_used": True,
+                "selected": False,
+                "failure_reason": None,
+            },
+            {
+                "id": "rpt-large-full",
+                "status": "completed",
+                "model_id": "rpt-large",
+                "context_candidate_rows": 5197,
+                "context_rows_planned": 5197,
+                "context_rows_sent": 5197,
+                "context_strategy": "full",
+                "cli_strategy": None,
+                "context_seed": None,
+                "input_format": "parquet",
+                "fold_eligibility_policy": "fold-training rows only",
+                "score": SCORES["sap_rpt"],
+                "latency_ms": {"median": 3750, "p95": 4600},
+                "throughput_queries_per_second": 124.7,
+                "request_count": 6,
+                "retrieval_extra_used": False,
+                "selected": True,
+                "failure_reason": None,
+            },
+        ],
+        "evaluation_coverage": {
+            "summary": "evaluated under the approved configurations",
+            "context_scale_tested": True,
+            "retrieval_comparison_tested": True,
+            "model_variants_tested": True,
+            "full_context_tested": True,
+            "coverage_gaps": [],
         },
         "transfer_confirmation": {
             "approval_id": "rpt-transfer-1",
@@ -417,7 +505,10 @@ def handoff_body(selected: tuple[str, ...], winner: str) -> str:
     if "sap_rpt" in selected:
         lines.append(
             "SAP RPT context: frozen labelled rows. "
-            "Access: internal CLI. Latency: 120 ms per request."
+            "Access: internal CLI. Latency: 120 ms per request. "
+            "Model IDs: rpt-standard and rpt-large. Retrieval: random::2048 "
+            "and vectorsearch::2048. The configuration ledger shows RPT was "
+            "evaluated under the approved configurations."
         )
     return "\n".join(lines)
 
@@ -955,8 +1046,8 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
                     "changes": [
                         {
                             "path": "tracks.sap_rpt.budget.max_context_rows",
-                            "before": 256,
-                            "after": 512,
+                            "before": 2048,
+                            "after": 5200,
                         }
                     ],
                 }
@@ -965,7 +1056,7 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
             completed = run_validator(project)
             self.assertEqual(completed.returncode, 0, completed.stdout)
 
-            document["approval"]["amendments"][0]["changes"][0]["after"] = 256
+            document["approval"]["amendments"][0]["changes"][0]["after"] = 2048
             write_json(run_dir / "run.json", document)
             completed = run_validator(project)
             self.assertNotEqual(completed.returncode, 0)
@@ -1000,6 +1091,72 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
             self.assertIn(
                 "max_context_rows plus max_query_batch_rows cannot exceed "
                 "max_request_rows",
+                completed.stdout,
+            )
+
+    def test_rpt_requires_one_upfront_adaptive_configuration_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("sap_rpt",))
+            document = read_json(run_dir / "run.json")
+            del document["approval"]["tracks"]["sap_rpt"]["plan"]
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "plan must be a non-empty object for an approved SAP RPT track",
+                completed.stdout,
+            )
+
+    def test_rpt_vectorsearch_requires_approved_retrieval_extra(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("sap_rpt",))
+            document = read_json(run_dir / "run.json")
+            plan = document["approval"]["tracks"]["sap_rpt"]["plan"]
+            plan["retrieval_extra_status"] = "unavailable"
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "must be installed or approved_install when vectorsearch is "
+                "planned",
+                completed.stdout,
+            )
+
+    def test_rpt_configuration_ledger_enforces_full_context_and_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("sap_rpt",))
+            document = read_json(run_dir / "run.json")
+            backend = document["backends"]["sap_rpt"]
+            selected = backend["configurations"][2]
+            selected["context_rows_planned"] = 2048
+            selected["context_rows_sent"] = 2048
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "full context must plan every candidate row",
+                completed.stdout,
+            )
+            self.assertIn(
+                "context_scale_tested must match the completed configuration "
+                "ledger",
+                completed.stdout,
+            )
+
+    def test_rpt_configuration_ledger_must_cover_approved_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project, selected=("sap_rpt",))
+            document = read_json(run_dir / "run.json")
+            document["backends"]["sap_rpt"]["configurations"].pop(0)
+            write_json(run_dir / "run.json", document)
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "one row for every approved estimated configuration",
                 completed.stdout,
             )
 

@@ -46,7 +46,7 @@ Present:
 | Evaluation | Population, split design, primary metric, uncertainty method |
 | Classical | Include/decline, families, Optuna/search and compute budget |
 | AutoGluon | Include/decline, preset, runtime estimate, run-to-completion or time-limited mode, optional time limit and resource budget |
-| SAP RPT | Include/decline, model/access route, context/query policy, request budget, named destination and transferred data scope |
+| SAP RPT | Include/decline, accessible model IDs/access route, full-context or truncation plan, context sizes, retrieval strategies/readiness, input format/seed, request budget, named destination and transferred data scope |
 | Selection | Operational constraints used alongside predictive quality |
 
 Recommend a concrete choice for each track. Require an explicit response that
@@ -65,14 +65,20 @@ accept an ordinary semantic yes/no or requested changes.
 Before invoking that question, finish all safe read-only preflight checks that
 could reveal a later blocker: dependency availability, expected installs,
 AutoGluon runtime range, disk/resources, RPT CLI/access readiness, and transfer
-scope. Put every foreseeable decision in one structured question invocation so
-the user can approve the complete unattended run and walk away.
+scope. For RPT, discover accessible model IDs, deployed capacities, whether
+full fold-valid context fits, retrieval-extra availability, input size/format,
+and the estimated model/context/retrieval request matrix. If a capacity probe
+would transfer data, include that probe inside the proposed transfer and
+request budget rather than running it before approval. Put every foreseeable
+decision in one structured question invocation so the user can approve the
+complete unattended run and walk away.
 
 Record the confirmed target/features in `problem`, the evaluation plan in
 `evaluation`, and set `approval.scope.target`, `feature_contract`,
 `split_design`, and `primary_metric` to true only after the user confirms those
-current values. Record each track's selection/status/budget and the approval
-time in `approval`. Initialize `approval.amendments` and
+current values. Record each track's selection/status/budget, the approved RPT
+configuration plan when selected, and the approval time in `approval`.
+Initialize `approval.amendments` and
 `approval.remote_transfers` as lists, even when empty.
 
 For each later approved plan change, add one amendment with a unique ID,
@@ -155,8 +161,10 @@ Do not express every backend as Optuna trials:
   run-to-completion.
 - **SAP RPT:** `max_context_rows`, `max_request_rows` for context plus query,
   `max_query_batch_rows` per call, `max_columns`, `max_requests`,
-  `max_retries`, and `timeout_seconds`, plus remote-transfer approval and any
-  latency/cost envelope.
+  `max_retries`, and `timeout_seconds`, plus an upfront plan containing model
+  IDs, full-context behavior, context-size candidates, retrieval strategies
+  and extra status, input format, reproducibility seed, estimated
+  configurations, remote-transfer approval, and any latency/cost envelope.
 
 Ask before materially exceeding any approved budget.
 

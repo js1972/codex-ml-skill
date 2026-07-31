@@ -398,6 +398,36 @@ def backend_detail_sections(backends: dict[str, Any]) -> str:
 
     sap_rpt = backends.get("sap_rpt")
     if isinstance(sap_rpt, dict):
+        configuration_rows: list[str] = []
+        for configuration in sap_rpt.get("configurations") or []:
+            if not isinstance(configuration, dict):
+                continue
+            latency = configuration.get("latency_ms") or {}
+            latency_text = (
+                f"{fmt_number(latency.get('median'))} / "
+                f"{fmt_number(latency.get('p95'))}"
+                if isinstance(latency, dict)
+                else "—"
+            )
+            configuration_rows.append(
+                "<tr>"
+                f"<td>{fmt_number(configuration.get('selected'))}</td>"
+                f"<td>{badge(configuration.get('status'))}</td>"
+                f"<td>{esc(configuration.get('model_id'))}</td>"
+                f"<td>{fmt_number(configuration.get('context_candidate_rows'))}</td>"
+                f"<td>{fmt_number(configuration.get('context_rows_planned'))}</td>"
+                f"<td>{fmt_number(configuration.get('context_rows_sent'))}</td>"
+                f"<td>{esc(configuration.get('context_strategy'))}</td>"
+                f"<td>{esc(configuration.get('cli_strategy'))}</td>"
+                f"<td>{esc(configuration.get('input_format'))}</td>"
+                f"<td>{fmt_number(configuration.get('score'))}</td>"
+                f"<td>{latency_text}</td>"
+                f"<td>{fmt_number(configuration.get('throughput_queries_per_second'))}</td>"
+                f"<td>{fmt_number(configuration.get('request_count'))}</td>"
+                f"<td>{esc(configuration.get('failure_reason'))}</td>"
+                "</tr>"
+            )
+        coverage = sap_rpt.get("evaluation_coverage") or {}
         sections.append(
             '<article class="backend-detail">'
             "<h3>SAP RPT context, access, and latency</h3>"
@@ -413,6 +443,45 @@ def backend_detail_sections(backends: dict[str, Any]) -> str:
                             compact(sap_rpt.get('transfer_confirmation')),
                         ),
                         ('Latency and evidence', compact(sap_rpt.get('evidence'))),
+                    ]
+                )
+            }</dl>"
+            "<h4>SAP RPT configuration ledger</h4>"
+            "<p>Model ID, context scale, retrieval strategy, accuracy, and "
+            "operational measurements are shown for every approved attempt.</p>"
+            '<div class="table-wrap"><table><thead><tr>'
+            "<th>Selected</th><th>Status</th><th>Model ID</th>"
+            "<th>Candidate context</th><th>Context planned</th>"
+            "<th>Context sent</th>"
+            "<th>Retrieval strategy</th><th>CLI strategy</th>"
+            "<th>Input</th><th>Score</th><th>Median / p95 latency (ms)</th>"
+            "<th>Queries/s</th><th>Requests</th><th>Failure</th>"
+            f"</tr></thead><tbody>{
+                ''.join(configuration_rows)
+                or '<tr><td colspan="14">No RPT configurations were recorded.</td></tr>'
+            }</tbody></table></div>"
+            "<h4>RPT evaluation coverage</h4>"
+            f"<dl>{
+                definition_rows(
+                    [
+                        ('Conclusion', coverage.get('summary')),
+                        (
+                            'Context scale tested',
+                            coverage.get('context_scale_tested'),
+                        ),
+                        (
+                            'Retrieval comparison tested',
+                            coverage.get('retrieval_comparison_tested'),
+                        ),
+                        (
+                            'Model variants tested',
+                            coverage.get('model_variants_tested'),
+                        ),
+                        (
+                            'Full context tested',
+                            coverage.get('full_context_tested'),
+                        ),
+                        ('Coverage gaps', compact(coverage.get('coverage_gaps'))),
                     ]
                 )
             }</dl>"

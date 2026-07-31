@@ -166,12 +166,23 @@ three backends:
           "memory_gb": 4,
           "gpu_enabled": false,
           "max_requests": 20,
-          "max_context_rows": 512,
-          "max_request_rows": 576,
-          "max_query_batch_rows": 40,
+          "max_context_rows": 5200,
+          "max_request_rows": 5700,
+          "max_query_batch_rows": 500,
           "max_columns": 16,
           "max_retries": 2,
           "timeout_seconds": 120
+        },
+        "plan": {
+          "model_ids": ["rpt-standard", "rpt-large"],
+          "full_context_fits": true,
+          "use_full_context_when_supported": true,
+          "context_size_candidates": [2048, 5197],
+          "retrieval_strategies": ["full", "random", "vectorsearch"],
+          "context_seed": 0,
+          "input_format": "parquet",
+          "retrieval_extra_status": "installed",
+          "estimated_configurations": 3
         }
       }
     },
@@ -308,6 +319,7 @@ three backends:
       },
       "model": {
         "name": "SAP RPT",
+        "id": "rpt-large",
         "version": "recorded model version",
         "production_capable": true
       },
@@ -319,7 +331,78 @@ three backends:
       "context": {
         "manifest": "backends/sap_rpt/context_manifest.json",
         "fingerprint": "sha256:...",
-        "policy": "frozen labelled context reconstructed for inference"
+        "policy": "frozen labelled context reconstructed for inference",
+        "selected_configuration_id": "rpt-large-full"
+      },
+      "configurations": [
+        {
+          "id": "rpt-standard-random-2048",
+          "status": "completed",
+          "model_id": "rpt-standard",
+          "context_candidate_rows": 5197,
+          "context_rows_planned": 2048,
+          "context_rows_sent": 2048,
+          "context_strategy": "random",
+          "cli_strategy": "random::2048",
+          "context_seed": 0,
+          "input_format": "parquet",
+          "fold_eligibility_policy": "fold-training rows only",
+          "score": 0.80,
+          "latency_ms": {"median": 3300, "p95": 4100},
+          "throughput_queries_per_second": 118.4,
+          "request_count": 10,
+          "retrieval_extra_used": false,
+          "selected": false,
+          "failure_reason": null
+        },
+        {
+          "id": "rpt-standard-vectorsearch-2048",
+          "status": "completed",
+          "model_id": "rpt-standard",
+          "context_candidate_rows": 5197,
+          "context_rows_planned": 2048,
+          "context_rows_sent": 2048,
+          "context_strategy": "vectorsearch",
+          "cli_strategy": "vectorsearch::2048",
+          "context_seed": 0,
+          "input_format": "parquet",
+          "fold_eligibility_policy": "fold-training retrieval corpus only",
+          "score": 0.81,
+          "latency_ms": {"median": 3400, "p95": 4200},
+          "throughput_queries_per_second": 113.2,
+          "request_count": 10,
+          "retrieval_extra_used": true,
+          "selected": false,
+          "failure_reason": null
+        },
+        {
+          "id": "rpt-large-full",
+          "status": "completed",
+          "model_id": "rpt-large",
+          "context_candidate_rows": 5197,
+          "context_rows_planned": 5197,
+          "context_rows_sent": 5197,
+          "context_strategy": "full",
+          "cli_strategy": null,
+          "context_seed": null,
+          "input_format": "parquet",
+          "fold_eligibility_policy": "fold-training rows only",
+          "score": 0.83,
+          "latency_ms": {"median": 3750, "p95": 4600},
+          "throughput_queries_per_second": 124.7,
+          "request_count": 10,
+          "retrieval_extra_used": false,
+          "selected": true,
+          "failure_reason": null
+        }
+      ],
+      "evaluation_coverage": {
+        "summary": "evaluated under the approved configurations",
+        "context_scale_tested": true,
+        "retrieval_comparison_tested": true,
+        "model_variants_tested": true,
+        "full_context_tested": true,
+        "coverage_gaps": []
       },
       "transfer_confirmation": {
         "approval_id": "rpt-transfer-1",
@@ -387,8 +470,10 @@ not duplicate those values inside `approval`.
 
 `approval.tracks` must contain exactly `classical`, `autogluon`, and `sap_rpt`.
 For an approved track, use `selected: true`, `status: "approved"`, and a
-non-empty track-appropriate budget. For a declined track, use `selected:
-false`, `status: "declined"`, and `budget: null`.
+non-empty track-appropriate budget. An approved SAP RPT track also requires a
+non-empty `plan` fixed by the upfront approval. For a declined track, use
+`selected: false`, `status: "declined"`, `budget: null`, and, for SAP RPT,
+`plan: null`.
 
 `approval.amendments` and `approval.remote_transfers` must always be lists.
 Record each later plan change as a unique amendment with `approved_at`,
@@ -413,6 +498,17 @@ Every approved budget records positive `cpu_count`, `parallel_jobs`, and
 - SAP RPT: `max_requests`, `max_context_rows`, `max_request_rows`,
   `max_query_batch_rows`, `max_columns`, `max_retries`, and
   `timeout_seconds`.
+
+The approved RPT `plan` records non-empty accessible `model_ids`,
+the discovered `full_context_fits` decision,
+`use_full_context_when_supported: true`, positive unique
+`context_size_candidates`, unique `retrieval_strategies` drawn from `full`,
+`random`, and `vectorsearch`, a non-negative `context_seed`, column-oriented
+`input_format`, retrieval-extra status, and a positive estimated configuration
+count. Include `vectorsearch` only when the retrieval extra is installed or
+its installation was approved. Use full context as the primary configuration
+whenever it fits; context-size candidates are diagnostic comparisons, not a
+fixed cap.
 
 Make the classical ledger's family set equal
 `approval.tracks.classical.budget.candidate_families`. Make classical
@@ -502,6 +598,24 @@ must travel with the run, keep it inside `backends/sap_rpt/` and reference it
 from the manifest. Record context fingerprint/policy, RPT model identity,
 access route, customer production route, transfer checks, result, and evidence
 in `run.json`.
+
+For every completed RPT backend, retain a non-empty
+`backends.sap_rpt.configurations` ledger with one row per attempted
+model/context/retrieval combination. Record a unique ID, status, exact model
+ID, candidate/planned/sent context rows, `full`, `random`, or `vectorsearch`
+strategy, exact CLI strategy, seed, column-oriented input format, fold/time
+eligibility policy, comparable score, median/p95 latency, throughput, request
+count, retrieval-extra use, selection flag, and failure reason. Exactly one
+completed row is selected; its score matches the backend evaluation, its model
+ID matches `backends.sap_rpt.model.id`, and
+`context.selected_configuration_id` references it.
+
+Also retain `backends.sap_rpt.evaluation_coverage` with the fixed summary
+“evaluated under the approved configurations,” booleans for context-scale,
+retrieval, model-variant, and full-context coverage, plus a `coverage_gaps`
+list. Derive the booleans from completed ledger rows. Explain why retrieval was
+not needed when full context fit; when truncation was required, name any
+available but untested strategy, size range, or model variant.
 
 Do not create an RPT model pickle, `train.py`, training/fit fields,
 hyperparameters, Optuna/search/trial fields, or copied artifacts from another
@@ -596,9 +710,11 @@ not use JavaScript or external assets. Include:
 - the AutoGluon preset/time/resource settings, fold strategy, deployment-clone
   evidence, native leaderboard, internal failures, runtime safeguards, and
   result/status whenever AutoGluon was approved;
-- SAP RPT context policy/coverage, model/access distinction, request failures,
-  latency/throughput, and result/status whenever SAP RPT was approved; label
-  unavailable or unmeasured dimensions explicitly;
+- SAP RPT context policy/coverage, model/access distinction, and one row per
+  attempted configuration with model ID, context size, retrieval strategy,
+  score, request count, latency, throughput, and failure; state that RPT was
+  evaluated under the approved configurations and label unavailable,
+  untested, or unmeasured dimensions explicitly;
 - same-row/same-fold comparison;
 - uncertainty, calibration/threshold behavior, errors, subgroup analysis, and
   evidence limitations;
@@ -611,7 +727,8 @@ backend's status/score, shared metric, predictive winner, operational
 recommendation, unified `infer.py` command, intended/prohibited uses,
 limitations, uncertainty, and monitoring. When applicable, it must also name
 the classical baseline/leaderboard, AutoGluon preset/deployment clone/internal
-failure ledger, and SAP RPT context/access/latency. Include approved
+failure ledger, and SAP RPT model ID/context/retrieval/latency/configuration
+coverage. Include approved
 amendments/transfers. Do not create a separate model card; include governance in
 the report, results, and `run.json.problem` as applicable.
 

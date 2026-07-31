@@ -69,7 +69,9 @@ experiment plan for explicit approval:
 - classical candidate families, minimum coverage, time, and Optuna trials;
 - AutoGluon choice, preset, estimated runtime, run-to-completion or
   time-limited mode, optional time limit, and disk/resources;
-- SAP RPT choice, context rows, context-plus-query request rows, query rows per
+- SAP RPT choice, accessible model IDs, whether full fold-valid context fits,
+  context-size/retrieval strategy matrix, retrieval-extra readiness, input
+  format/seed, context rows, context-plus-query request rows, query rows per
   call, columns, request/retry/timeout budget, access route, named destination,
   and transferred data scope;
 - operational constraints used to recommend a winner.
@@ -136,6 +138,14 @@ request/latency limits, and leaves a tested new-row command:
 python infer.py --backend sap-rpt \
   --input new_rows.csv --output predictions.csv
 ```
+
+It sends the full leakage-safe fold context whenever deployed limits permit.
+When truncation is required, the upfront plan compares useful distinct context
+sizes through the CLI's reproducible `random::N` baseline and, when the
+retrieval extra is available and approved, `vectorsearch::N`. Inputs over 1 MB
+use Parquet. The inclusive report records every attempted model/context/
+retrieval configuration with its score, request count, latency, throughput,
+and failure status, then states which approved coverage was actually tested.
 
 Credentials and interactive authentication remain user-managed and are never
 stored in artifacts.

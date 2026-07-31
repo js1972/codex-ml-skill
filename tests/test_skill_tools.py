@@ -53,6 +53,25 @@ class ApprovalGuidanceTests(unittest.TestCase):
         self.assertIn("do not ask a second rpt-specific confirmation", sap_rpt)
         self.assertNotIn("obtain a second explicit confirmation", governance)
 
+    def test_rpt_context_plan_is_adaptive_and_cli_aware(self) -> None:
+        sap_rpt = (
+            REPO_ROOT / "skills/ml-model-builder/references/sap-rpt.md"
+        ).read_text(encoding="utf-8")
+        artifacts = (
+            REPO_ROOT / "skills/ml-model-builder/references/artifacts.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Do not default to 512", sap_rpt)
+        self.assertIn("random::N", sap_rpt)
+        self.assertIn("vectorsearch::N", sap_rpt)
+        self.assertIn("character n-gram", sap_rpt)
+        self.assertIn("Query rows are preserved", sap_rpt)
+        self.assertIn("Prefer Parquet when", sap_rpt)
+        self.assertIn("sap-rpt auth status -o json", sap_rpt)
+        self.assertIn("sap-rpt configure", sap_rpt)
+        self.assertIn("evaluated under the approved configurations", sap_rpt)
+        self.assertNotIn('"max_context_rows": 512', artifacts)
+
 
 class AutoGluonCompatibilityTests(unittest.TestCase):
     @staticmethod
@@ -515,12 +534,27 @@ def representative_run() -> dict:
                         "memory_gb": 4,
                         "gpu_enabled": False,
                         "max_requests": 20,
-                        "max_context_rows": 1000,
-                        "max_request_rows": 1200,
-                        "max_query_batch_rows": 100,
+                        "max_context_rows": 5200,
+                        "max_request_rows": 5700,
+                        "max_query_batch_rows": 500,
                         "max_columns": 20,
                         "max_retries": 2,
                         "timeout_seconds": 120,
+                    },
+                    "plan": {
+                        "model_ids": ["rpt-standard", "rpt-large"],
+                        "full_context_fits": True,
+                        "use_full_context_when_supported": True,
+                        "context_size_candidates": [2048, 5197],
+                        "retrieval_strategies": [
+                            "full",
+                            "random",
+                            "vectorsearch",
+                        ],
+                        "context_seed": 0,
+                        "input_format": "parquet",
+                        "retrieval_extra_status": "installed",
+                        "estimated_configurations": 3,
                     },
                 },
             },
@@ -532,8 +566,8 @@ def representative_run() -> dict:
                     "changes": [
                         {
                             "path": "tracks.sap_rpt.budget.max_context_rows",
-                            "before": 512,
-                            "after": 1000,
+                            "before": 2048,
+                            "after": 5200,
                         }
                     ],
                 }
@@ -656,6 +690,7 @@ def representative_run() -> dict:
                 "retained": True,
                 "model": {
                     "name": "sap-rpt",
+                    "id": "rpt-large",
                     "version": "production",
                     "production_capable": True,
                 },
@@ -668,6 +703,79 @@ def representative_run() -> dict:
                     "manifest": "backends/sap_rpt/context.json",
                     "fingerprint": "sha256:context",
                     "policy": "train rows only",
+                    "selected_configuration_id": "rpt-large-full",
+                },
+                "configurations": [
+                    {
+                        "id": "rpt-standard-random-2048",
+                        "status": "completed",
+                        "model_id": "rpt-standard",
+                        "context_candidate_rows": 5197,
+                        "context_rows_planned": 2048,
+                        "context_rows_sent": 2048,
+                        "context_strategy": "random",
+                        "cli_strategy": "random::2048",
+                        "context_seed": 0,
+                        "input_format": "parquet",
+                        "fold_eligibility_policy": "fold-training rows only",
+                        "score": 0.66,
+                        "latency_ms": {"median": 390, "p95": 510},
+                        "throughput_queries_per_second": 109.3,
+                        "request_count": 6,
+                        "retrieval_extra_used": False,
+                        "selected": False,
+                        "failure_reason": None,
+                    },
+                    {
+                        "id": "rpt-standard-vectorsearch-2048",
+                        "status": "completed",
+                        "model_id": "rpt-standard",
+                        "context_candidate_rows": 5197,
+                        "context_rows_planned": 2048,
+                        "context_rows_sent": 2048,
+                        "context_strategy": "vectorsearch",
+                        "cli_strategy": "vectorsearch::2048",
+                        "context_seed": 0,
+                        "input_format": "parquet",
+                        "fold_eligibility_policy": (
+                            "fold-training retrieval corpus only"
+                        ),
+                        "score": 0.67,
+                        "latency_ms": {"median": 410, "p95": 540},
+                        "throughput_queries_per_second": 103.8,
+                        "request_count": 6,
+                        "retrieval_extra_used": True,
+                        "selected": False,
+                        "failure_reason": None,
+                    },
+                    {
+                        "id": "rpt-large-full",
+                        "status": "completed",
+                        "model_id": "rpt-large",
+                        "context_candidate_rows": 5197,
+                        "context_rows_planned": 5197,
+                        "context_rows_sent": 5197,
+                        "context_strategy": "full",
+                        "cli_strategy": None,
+                        "context_seed": None,
+                        "input_format": "parquet",
+                        "fold_eligibility_policy": "fold-training rows only",
+                        "score": 0.69,
+                        "latency_ms": {"median": 420, "p95": 560},
+                        "throughput_queries_per_second": 101.2,
+                        "request_count": 6,
+                        "retrieval_extra_used": False,
+                        "selected": True,
+                        "failure_reason": None,
+                    },
+                ],
+                "evaluation_coverage": {
+                    "summary": "evaluated under the approved configurations",
+                    "context_scale_tested": True,
+                    "retrieval_comparison_tested": True,
+                    "model_variants_tested": True,
+                    "full_context_tested": True,
+                    "coverage_gaps": [],
                 },
                 "transfer_confirmation": {
                     "approval_id": "rpt-transfer-1",
@@ -783,6 +891,11 @@ class ConsolidatedReportTests(unittest.TestCase):
             self.assertIn("internal failure ledger", lower)
             self.assertIn("neuralnetfastai", lower)
             self.assertIn("sap rpt context, access, and latency", lower)
+            self.assertIn("sap rpt configuration ledger", lower)
+            self.assertIn("rpt-standard", lower)
+            self.assertIn("rpt-large", lower)
+            self.assertIn("vectorsearch::2048", lower)
+            self.assertIn("evaluated under the approved configurations", lower)
             self.assertIn("approved amendments", lower)
             self.assertIn("approved remote transfers", lower)
             self.assertIn("uncertainty and limitations", lower)
