@@ -18,6 +18,29 @@ AUTOGLUON_CHECK_SCRIPT = SCRIPTS / "check_autogluon_compatibility.py"
 
 
 class ApprovalGuidanceTests(unittest.TestCase):
+    def test_ablation_guidance_requires_approval_and_development_evidence(
+        self,
+    ) -> None:
+        skill = (
+            REPO_ROOT / "skills/ml-model-builder/SKILL.md"
+        ).read_text(encoding="utf-8")
+        evaluation = (
+            REPO_ROOT
+            / "skills/ml-model-builder/references/evaluation-and-production.md"
+        ).read_text(encoding="utf-8")
+        artifacts = (
+            REPO_ROOT / "skills/ml-model-builder/references/artifacts.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Optional ablations", skill)
+        self.assertIn("full fold-local pipeline", skill)
+        self.assertIn("Never use sealed holdout", skill)
+        self.assertIn("## Ablation studies", evaluation)
+        self.assertIn("complete fold-local pipeline", evaluation)
+        self.assertIn("not an EDA technique", evaluation)
+        self.assertIn("approval.analyses.ablations", artifacts)
+        self.assertIn('"full_pipeline_retrain"', artifacts)
+
     def test_rpt_uses_one_structured_approval_without_magic_words(self) -> None:
         skill = " ".join(
             (REPO_ROOT / "skills/ml-model-builder/SKILL.md")

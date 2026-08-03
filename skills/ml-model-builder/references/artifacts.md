@@ -5,6 +5,7 @@
 - [Principles](#principles)
 - [Exact run layout](#exact-run-layout)
 - [run.json](#runjson)
+- [Optional analyses](#optional-analyses)
 - [Backend artifacts](#backend-artifacts)
 - [Entry points](#entry-points)
 - [Reports](#reports)
@@ -67,6 +68,9 @@ Use exactly these top-level contracts:
 - `selection`;
 - `inference`;
 - `lineage`.
+
+Add `analyses` only when an optional analysis was approved. It contains
+development-only evidence and never adds a directory or raw prediction files.
 
 The following example shows the required shape for an experiment retaining all
 three backends:
@@ -487,6 +491,14 @@ approval. Do not require a standalone second confirmation before the first RPT
 request. `transfer_confirmation` records execution checks against that approved
 scope; it does not imply another user prompt.
 
+When an ablation is approved, add `approval.analyses.ablations` with
+`selected: true`, positive `max_variants` and `time_limit_seconds`, and one or
+more approved `feature_groups`. Each group has a unique `id`, a non-empty list
+of source `columns` from `problem.feature_contract.included`, and a non-empty
+`hypothesis`. When ablations are declined, set `selected: false`, use null
+budget values, and leave `feature_groups` empty. Do not add this optional
+approval object when no ablation decision was needed.
+
 Every approved budget records positive `cpu_count`, `parallel_jobs`, and
 `memory_gb`, plus boolean `gpu_enabled`. Additionally require:
 
@@ -525,6 +537,35 @@ declined track.
 Every completed backend's evaluation must repeat the shared
 `split_fingerprint`, `evaluation_rows_fingerprint`, and primary metric so the
 validator can prove that the comparison uses the same evidence.
+
+## Optional analyses
+
+For an approved ablation, record `analyses.ablations` with exactly one entry
+per approved feature group. Each entry records a unique `id`,
+`approved_group_id`, completed `backend`, `status`,
+`procedure: "full_pipeline_retrain"`,
+`evidence_scope: "development_only"`, non-empty `conclusion`, and null
+`failure_reason` when completed. A completed entry contains:
+
+```json
+{
+  "development_evaluation": {
+    "split_fingerprint": "sha256:...",
+    "rows_fingerprint": "sha256:...",
+    "primary_metric": "macro_f1",
+    "reference_score": 0.72,
+    "ablated_score": 0.69,
+    "delta": -0.03,
+    "uncertainty": "paired fold-level interval"
+  }
+}
+```
+
+The development fingerprints must differ from the sealed final evaluation
+fingerprints. The primary metric must match the experiment metric, and `delta`
+equals `ablated_score - reference_score`. Failed or skipped entries instead use
+a non-empty `failure_reason` and no development score. The validator rejects
+unapproved, post-fit masking, final-evidence, or partially recorded ablations.
 
 ## Backend artifacts
 
@@ -716,6 +757,8 @@ not use JavaScript or external assets. Include:
   evaluated under the approved configurations and label unavailable,
   untested, or unmeasured dimensions explicitly;
 - same-row/same-fold comparison;
+- approved ablation hypotheses and completed development-only ablation results,
+  including the score delta, uncertainty, and correlation limitation;
 - uncertainty, calibration/threshold behavior, errors, subgroup analysis, and
   evidence limitations;
 - predictive winner and operational recommendation;
@@ -729,8 +772,10 @@ limitations, uncertainty, and monitoring. When applicable, it must also name
 the classical baseline/leaderboard, AutoGluon preset/deployment clone/internal
 failure ledger, and SAP RPT model ID/context/retrieval/latency/configuration
 coverage. Include approved
-amendments/transfers. Do not create a separate model card; include governance in
-the report, results, and `run.json.problem` as applicable.
+amendments/transfers and any completed ablation's feature group, development
+score delta, uncertainty, and interpretation. Do not create a separate model
+card; include governance in the report, results, and `run.json.problem` as
+applicable.
 
 ## Adding a backend to the same experiment
 

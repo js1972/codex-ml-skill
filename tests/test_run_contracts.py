@@ -17,6 +17,8 @@ FINGERPRINTS = {
     "split": "sha256:" + "b" * 64,
     "rows": "sha256:" + "c" * 64,
     "context": "sha256:" + "d" * 64,
+    "development_split": "sha256:" + "e" * 64,
+    "development_rows": "sha256:" + "f" * 64,
 }
 SCORES = {
     "classical": 0.72,
@@ -201,6 +203,45 @@ def backend_evaluation(backend: str) -> dict[str, Any]:
         "evaluation_rows_fingerprint": FINGERPRINTS["rows"],
         "primary_metric": "macro_f1",
         "score": SCORES[backend],
+    }
+
+
+def approved_ablation_plan() -> dict[str, Any]:
+    return {
+        "ablations": {
+            "selected": True,
+            "max_variants": 1,
+            "time_limit_seconds": 600,
+            "feature_groups": [
+                {
+                    "id": "acidity",
+                    "columns": ["fixed_acidity"],
+                    "hypothesis": "Acidity measurements materially improve macro F1.",
+                }
+            ],
+        }
+    }
+
+
+def completed_ablation() -> dict[str, Any]:
+    return {
+        "id": "without-acidity",
+        "approved_group_id": "acidity",
+        "backend": "classical",
+        "status": "completed",
+        "procedure": "full_pipeline_retrain",
+        "evidence_scope": "development_only",
+        "development_evaluation": {
+            "split_fingerprint": FINGERPRINTS["development_split"],
+            "rows_fingerprint": FINGERPRINTS["development_rows"],
+            "primary_metric": "macro_f1",
+            "reference_score": 0.72,
+            "ablated_score": 0.69,
+            "delta": -0.03,
+            "uncertainty": "paired fold-level macro-F1 differences",
+        },
+        "conclusion": "Retain the acidity measurement source in the candidate feature contract.",
+        "failure_reason": None,
     }
 
 
@@ -750,6 +791,10 @@ class ValidRunTests(unittest.TestCase):
                 selected=("classical", "autogluon", "sap_rpt"),
                 winner="sap_rpt",
             )
+            document = read_json(run_dir / "run.json")
+            document["approval"]["analyses"] = approved_ablation_plan()
+            document["analyses"] = {"ablations": [completed_ablation()]}
+            write_json(run_dir / "run.json", document)
             rendered = subprocess.run(
                 [sys.executable, str(REPORT_RENDERER), str(run_dir)],
                 cwd=REPOSITORY,
@@ -758,6 +803,10 @@ class ValidRunTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            report = (run_dir / "report.html").read_text(encoding="utf-8")
+            self.assertIn("Ablation studies", report)
+            self.assertIn("acidity", report)
+            self.assertIn("development evidence only", report)
             completed = run_validator(project)
             self.assertEqual(completed.returncode, 0, completed.stdout)
 
@@ -792,6 +841,43 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
                 "approval.scope.primary_metric must be true",
                 completed.stdout,
             )
+
+    def test_approved_ablation_requires_development_only_full_retraining(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project)
+            document = read_json(run_dir / "run.json")
+            document["approval"]["analyses"] = approved_ablation_plan()
+            document["analyses"] = {"ablations": [completed_ablation()]}
+            write_json(run_dir / "run.json", document)
+
+            completed = run_validator(project)
+            self.assertEqual(completed.returncode, 0, completed.stdout)
+
+            ablation = document["analyses"]["ablations"][0]
+            ablation["procedure"] = "post_fit_mask"
+            ablation["development_evaluation"]["split_fingerprint"] = (
+                FINGERPRINTS["split"]
+            )
+            write_json(run_dir / "run.json", document)
+            rejected = run_validator(project)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("procedure must be 'full_pipeline_retrain'", rejected.stdout)
+            self.assertIn("must not use sealed final evidence", rejected.stdout)
+
+    def test_ablation_execution_requires_an_approved_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run_dir = build_project(project)
+            document = read_json(run_dir / "run.json")
+            document["analyses"] = {"ablations": [completed_ablation()]}
+            write_json(run_dir / "run.json", document)
+
+            completed = run_validator(project)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("requires a selected approval", completed.stdout)
 
     def test_unapproved_backend_execution_evidence_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1048,6 +1134,11 @@ class ApprovalAndBackendSemanticsTests(unittest.TestCase):
                             "path": "tracks.sap_rpt.budget.max_context_rows",
                             "before": 2048,
                             "after": 5200,
+                        },
+                        {
+                            "path": "analyses.ablations.max_variants",
+                            "before": None,
+                            "after": 1,
                         }
                     ],
                 }

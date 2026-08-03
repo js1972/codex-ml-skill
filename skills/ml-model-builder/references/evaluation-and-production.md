@@ -9,6 +9,7 @@
 - [Uncertainty and practical value](#uncertainty-and-practical-value)
 - [Error and subgroup analysis](#error-and-subgroup-analysis)
 - [Explainability](#explainability)
+- [Ablation studies](#ablation-studies)
 - [Inference testing](#inference-testing)
 - [Security and dependencies](#security-and-dependencies)
 - [Monitoring and retraining](#monitoring-and-retraining)
@@ -154,6 +155,36 @@ Explain that:
 
 Save feature-name mappings and compute explanations on held-out validation or
 an approved sample, not on sealed holdout before final evaluation.
+
+## Ablation studies
+
+Use an ablation to test the predictive contribution and operational necessity
+of one pre-approved feature group or data source. It is not an EDA technique,
+feature attribution method, or causal analysis.
+
+Plan the feature groups, hypotheses, reference procedure, retraining budget,
+and development-only evidence boundary in the consolidated approval. Begin only
+after a candidate procedure exists, but before its final evaluation. For each
+group, remove it and rerun the complete fold-local pipeline: all preprocessing,
+encodings, resampling, feature selection, fitting, calibration, thresholding,
+and queue policy where applicable. Do not zero, permute, or mask columns in an
+already fitted model and label that result an ablation.
+
+Compare the ablated and reference procedures on the same development folds,
+rows, weights, metric, and paired uncertainty/resampling design. Record the
+score delta as `ablated_score - reference_score`, uncertainty, and the practical
+cost/latency/privacy or resilience implication. For correlated features, a
+small drop can mean that another included feature substitutes for the removed
+signal; it does not establish irrelevance or causality. Prefer coherent source
+or domain groups to arbitrary single columns.
+
+Never expose sealed holdout, external-test, or active outer-fold targets to
+ablation selection. If an ablation result changes the released feature
+contract, treat it as selection evidence and obtain untouched future/external
+evidence for the changed procedure. Keep a completed development-only analysis
+in `run.json.analyses.ablations`; do not create a separate raw-prediction or
+figure directory. Treat inference-time missing-value simulation as a separate
+robustness test, not an ablation.
 
 ## Inference testing
 

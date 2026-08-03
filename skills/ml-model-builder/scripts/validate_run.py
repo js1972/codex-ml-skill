@@ -1099,9 +1099,10 @@ def _validate_approval_amendments(
                         "tracks.classical.",
                         "tracks.autogluon.",
                         "tracks.sap_rpt.",
+                        "analyses.",
                     )
                 ),
-                f"{change_prefix}.path must identify an approval scope or track field",
+                f"{change_prefix}.path must identify an approval scope, track, or analysis field",
                 errors,
             )
             if is_nonempty_string(path):
@@ -1240,7 +1241,14 @@ def validate_approval(
         return set(), {}
     validate_known_keys(
         approval,
-        {"approved_at", "scope", "tracks", "amendments", "remote_transfers"},
+        {
+            "approved_at",
+            "scope",
+            "tracks",
+            "amendments",
+            "remote_transfers",
+            "analyses",
+        },
         "run.json: approval",
         errors,
     )
@@ -1341,6 +1349,340 @@ def validate_approval(
         errors,
     )
     return selected, remote_transfers
+
+
+def validate_ablation_plan(
+    document: dict[str, Any],
+    errors: list[str],
+) -> dict[str, Any] | None:
+    """Validate the optional, pre-approved development-only ablation plan."""
+    approval = document.get("approval")
+    if not isinstance(approval, dict) or "analyses" not in approval:
+        return None
+    analyses = approval.get("analyses")
+    field = "run.json: approval.analyses"
+    if not require(isinstance(analyses, dict), f"{field} must be an object", errors):
+        return None
+    validate_known_keys(analyses, {"ablations"}, field, errors)
+    plan = analyses.get("ablations")
+    plan_field = f"{field}.ablations"
+    if not require(isinstance(plan, dict), f"{plan_field} must be an object", errors):
+        return None
+    validate_known_keys(
+        plan,
+        {"selected", "max_variants", "time_limit_seconds", "feature_groups"},
+        plan_field,
+        errors,
+    )
+    selected = plan.get("selected")
+    require(
+        isinstance(selected, bool),
+        f"{plan_field}.selected must be boolean",
+        errors,
+    )
+    if selected is not True:
+        require(
+            plan.get("max_variants") in (None, 0),
+            f"{plan_field}.max_variants must be null or 0 when declined",
+            errors,
+        )
+        require(
+            plan.get("time_limit_seconds") is None,
+            f"{plan_field}.time_limit_seconds must be null when declined",
+            errors,
+        )
+        require(
+            plan.get("feature_groups") in (None, []),
+            f"{plan_field}.feature_groups must be empty when declined",
+            errors,
+        )
+        return None
+
+    require(
+        is_positive_integer(plan.get("max_variants")),
+        f"{plan_field}.max_variants must be a positive integer",
+        errors,
+    )
+    require(
+        is_positive_integer(plan.get("time_limit_seconds")),
+        f"{plan_field}.time_limit_seconds must be a positive integer",
+        errors,
+    )
+    groups = plan.get("feature_groups")
+    if not require(
+        isinstance(groups, list) and bool(groups),
+        f"{plan_field}.feature_groups must be a non-empty list when selected",
+        errors,
+    ):
+        return plan
+    if is_positive_integer(plan.get("max_variants")):
+        require(
+            len(groups) <= plan["max_variants"],
+            f"{plan_field}.max_variants must cover every approved feature group",
+            errors,
+        )
+
+    included_features = nested(document, "problem", "feature_contract", "included")
+    group_ids: list[str] = []
+    for index, group in enumerate(groups):
+        prefix = f"{plan_field}.feature_groups[{index}]"
+        if not require(isinstance(group, dict), f"{prefix} must be an object", errors):
+            continue
+        validate_known_keys(group, {"id", "columns", "hypothesis"}, prefix, errors)
+        identifier = group.get("id")
+        require(
+            is_nonempty_string(identifier),
+            f"{prefix}.id must be non-empty",
+            errors,
+        )
+        if is_nonempty_string(identifier):
+            group_ids.append(identifier)
+        columns = group.get("columns")
+        require(
+            is_string_list(columns, nonempty=True),
+            f"{prefix}.columns must be a non-empty unique string list",
+            errors,
+        )
+        if isinstance(columns, list) and isinstance(included_features, list):
+            unknown = sorted(set(columns) - set(included_features))
+            require(
+                not unknown,
+                f"{prefix}.columns must belong to the approved feature contract",
+                errors,
+            )
+        require(
+            is_nonempty_string(group.get("hypothesis")),
+            f"{prefix}.hypothesis must be non-empty",
+            errors,
+        )
+    require(
+        len(group_ids) == len(set(group_ids)),
+        f"{plan_field}.feature_groups ids must be unique",
+        errors,
+    )
+    return plan
+
+
+def validate_ablations(
+    document: dict[str, Any],
+    plan: dict[str, Any] | None,
+    selected_backends: set[str],
+    evaluation: dict[str, Any] | None,
+    errors: list[str],
+) -> None:
+    """Require ablations to be approved, fully retrained, and development-only."""
+    analyses = document.get("analyses")
+    field = "run.json: analyses"
+    if plan is None:
+        if analyses is not None:
+            require(
+                analyses in ({}, None),
+                f"{field} requires a selected approval.analyses.ablations plan",
+                errors,
+            )
+        return
+    if not require(isinstance(analyses, dict), f"{field} must be an object", errors):
+        return
+    validate_known_keys(analyses, {"ablations"}, field, errors)
+    ablations = analyses.get("ablations")
+    if not require(
+        isinstance(ablations, list) and bool(ablations),
+        f"{field}.ablations must be a non-empty list for a selected plan",
+        errors,
+    ):
+        return
+
+    plan_groups = plan.get("feature_groups")
+    planned_ids = {
+        group.get("id")
+        for group in plan_groups
+        if isinstance(group, dict) and is_nonempty_string(group.get("id"))
+    } if isinstance(plan_groups, list) else set()
+    group_ids: list[str] = []
+    analysis_ids: list[str] = []
+    backends = document.get("backends")
+    for index, ablation in enumerate(ablations):
+        prefix = f"{field}.ablations[{index}]"
+        if not require(
+            isinstance(ablation, dict),
+            f"{prefix} must be an object",
+            errors,
+        ):
+            continue
+        validate_known_keys(
+            ablation,
+            {
+                "id",
+                "approved_group_id",
+                "backend",
+                "status",
+                "procedure",
+                "evidence_scope",
+                "development_evaluation",
+                "conclusion",
+                "failure_reason",
+            },
+            prefix,
+            errors,
+        )
+        identifier = ablation.get("id")
+        require(
+            is_nonempty_string(identifier),
+            f"{prefix}.id must be non-empty",
+            errors,
+        )
+        if is_nonempty_string(identifier):
+            analysis_ids.append(identifier)
+        group_id = ablation.get("approved_group_id")
+        require(
+            is_nonempty_string(group_id) and group_id in planned_ids,
+            f"{prefix}.approved_group_id must name an approved feature group",
+            errors,
+        )
+        if is_nonempty_string(group_id):
+            group_ids.append(group_id)
+        backend = ablation.get("backend")
+        require(
+            backend in selected_backends,
+            f"{prefix}.backend must name an approved backend",
+            errors,
+        )
+        if isinstance(backends, dict) and backend in backends:
+            require(
+                nested(backends, backend, "status") == "completed",
+                f"{prefix}.backend must have completed before ablation results are recorded",
+                errors,
+            )
+        status = ablation.get("status")
+        require(
+            status in {"completed", "failed", "skipped"},
+            f"{prefix}.status must be completed, failed, or skipped",
+            errors,
+        )
+        require(
+            ablation.get("procedure") == "full_pipeline_retrain",
+            f"{prefix}.procedure must be 'full_pipeline_retrain'",
+            errors,
+        )
+        require(
+            ablation.get("evidence_scope") == "development_only",
+            f"{prefix}.evidence_scope must be 'development_only'",
+            errors,
+        )
+        require(
+            is_nonempty_string(ablation.get("conclusion")),
+            f"{prefix}.conclusion must be non-empty",
+            errors,
+        )
+        development = ablation.get("development_evaluation")
+        if status != "completed":
+            require(
+                development in (None, {}),
+                f"{prefix}.development_evaluation must be null or empty unless completed",
+                errors,
+            )
+            require(
+                is_nonempty_string(ablation.get("failure_reason")),
+                f"{prefix}.failure_reason must be non-empty unless completed",
+                errors,
+            )
+            continue
+
+        require(
+            ablation.get("failure_reason") is None,
+            f"{prefix}.failure_reason must be null when completed",
+            errors,
+        )
+        development_field = f"{prefix}.development_evaluation"
+        if not require(
+            isinstance(development, dict),
+            f"{development_field} must be an object when completed",
+            errors,
+        ):
+            continue
+        validate_known_keys(
+            development,
+            {
+                "split_fingerprint",
+                "rows_fingerprint",
+                "primary_metric",
+                "reference_score",
+                "ablated_score",
+                "delta",
+                "uncertainty",
+            },
+            development_field,
+            errors,
+        )
+        for name in ("split_fingerprint", "rows_fingerprint"):
+            require(
+                is_sha256(development.get(name)),
+                f"{development_field}.{name} must be a SHA-256 digest",
+                errors,
+            )
+        if isinstance(evaluation, dict):
+            require(
+                development.get("split_fingerprint")
+                != evaluation.get("split_fingerprint"),
+                f"{development_field}.split_fingerprint must not use sealed final evidence",
+                errors,
+            )
+            require(
+                development.get("rows_fingerprint")
+                != evaluation.get("evaluation_rows_fingerprint"),
+                f"{development_field}.rows_fingerprint must not use sealed final evidence",
+                errors,
+            )
+            require(
+                development.get("primary_metric")
+                == nested(evaluation, "primary_metric", "name"),
+                f"{development_field}.primary_metric must match evaluation.primary_metric.name",
+                errors,
+            )
+        for name in ("reference_score", "ablated_score", "delta"):
+            require(
+                is_finite_number(development.get(name)),
+                f"{development_field}.{name} must be finite",
+                errors,
+            )
+        if all(
+            is_finite_number(development.get(name))
+            for name in ("reference_score", "ablated_score", "delta")
+        ):
+            expected_delta = (
+                float(development["ablated_score"])
+                - float(development["reference_score"])
+            )
+            require(
+                math.isclose(
+                    float(development["delta"]),
+                    expected_delta,
+                    rel_tol=1e-6,
+                    abs_tol=1e-8,
+                ),
+                f"{development_field}.delta must equal ablated_score minus reference_score",
+                errors,
+            )
+        require(
+            is_nonempty_string(development.get("uncertainty")),
+            f"{development_field}.uncertainty must be non-empty",
+            errors,
+        )
+    require(
+        len(analysis_ids) == len(set(analysis_ids)),
+        f"{field}.ablations ids must be unique",
+        errors,
+    )
+    require(
+        len(group_ids) == len(set(group_ids)),
+        f"{field}.ablations must record each approved feature group once",
+        errors,
+    )
+    require(
+        set(group_ids) == planned_ids,
+        f"{field}.ablations must cover exactly the approved feature groups",
+        errors,
+    )
 
 
 def validate_backend_evaluation(
@@ -3051,7 +3393,7 @@ def validate_run_document(
     missing = sorted(required - set(document))
     if missing:
         errors.append(f"run.json: missing required fields: {', '.join(missing)}")
-    validate_known_keys(document, required, "run.json", errors)
+    validate_known_keys(document, required | {"analyses"}, "run.json", errors)
     require(
         is_nonempty_string(document.get("run_id")),
         "run.json: run_id must be a non-empty string",
@@ -3062,6 +3404,7 @@ def validate_run_document(
     validate_preflight(document, errors)
     evaluation = validate_evaluation(document, errors)
     selected, remote_transfers = validate_approval(document, errors)
+    ablation_plan = validate_ablation_plan(document, errors)
     scores, retained = validate_backends(
         document,
         selected,
@@ -3070,6 +3413,7 @@ def validate_run_document(
         run_dir,
         errors,
     )
+    validate_ablations(document, ablation_plan, selected, evaluation, errors)
     validate_selection(document, scores, retained, evaluation, errors)
     validate_inference_contract(document, retained, errors)
     validate_lineage(document, errors)

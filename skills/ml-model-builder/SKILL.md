@@ -63,7 +63,7 @@ Read only the references needed for the selected route:
 | Forecasting or time-dependent prediction | `references/time-series.md` |
 | Supervised or unsupervised anomaly detection | `references/anomaly-detection.md` |
 | Classical Optuna search, diagnostics, stacking | `references/optimization-and-ensembling.md` |
-| Metrics, uncertainty, explainability, deployment | `references/evaluation-and-production.md` |
+| Metrics, uncertainty, explainability, ablation, deployment | `references/evaluation-and-production.md` |
 | Healthcare, finance, employment, insurance, or other high-stakes use | `references/high-stakes.md` |
 | AutoGluon track | `references/automl.md` |
 | SAP RPT track | `references/sap-rpt.md` |
@@ -163,6 +163,9 @@ starting any backend, present a concise execution plan containing:
 - target and prediction moment;
 - included/excluded feature contract;
 - evaluation population, split strategy, primary metric, and uncertainty plan;
+- optional ablation plan when requested or material to a feature/source decision:
+  feature groups, hypotheses, full-pipeline retraining budget, and
+  development-only evidence boundary;
 - shared per-track CPU, parallel-job, memory, and GPU controls;
 - classical track: include/decline, candidate families, minimum coverage,
   wall-time, and Optuna-trial budget;
@@ -294,12 +297,30 @@ do not impose 512 rows as a default cap. Use Parquet for inputs over 1 MB.
 Select the model ID, context size, and retrieval policy from development
 evidence only, then freeze them before final evaluation.
 
+#### Optional ablations
+
+Run ablations only when the user approved the feature-group hypotheses and
+incremental budget. Freeze the candidate procedure on development evidence,
+then rerun its full fold-local pipeline with one approved group omitted. Do not
+zero or mask inputs in an already fitted model and call that an ablation.
+
+Use the same development metric, groups/time boundaries, weights, and paired
+resampling as the reference. Record the full-pipeline procedure, development
+fingerprints, score delta, uncertainty, and conclusion under `analyses` in
+`run.json`. Never use sealed holdout/external/outer-fold evidence for this
+work. Read `evaluation-and-production.md` before executing any ablation.
+
 ### 6. Select and evaluate
 
 Select candidates, thresholds, calibration, forecast strategy, or review
 budget using only permitted development evidence. Evaluate the frozen
 procedure once on the declared holdout/external set or aggregate untouched
 outer folds.
+
+Treat an ablation that changes the released feature contract as selection
+evidence. Create a descendant run and obtain untouched future/external evidence
+before claiming its result is unbiased; retain a development-only ablation in
+the parent only when it does not change the released procedure.
 
 Report every approved backend's status and failure/unavailability reason or
 same-population score. Include uncertainty, error and subgroup slices,
@@ -407,6 +428,9 @@ against previously opened final evidence while claiming a new unbiased result.
       otherwise compare the approved reproducible CLI context strategies and
       sizes.
 - [ ] Compare approved tracks on shared evaluation boundaries and metric code.
+- [ ] When approved, complete every ablation with full-pipeline retraining on
+      development evidence only; report paired uncertainty and the correlation
+      limitation without using it as causal proof.
 - [ ] Report baselines, uncertainty, errors, limitations, predictive winner,
       operational recommendation, and exact inference commands.
 - [ ] Test unified inference for every retained backend.

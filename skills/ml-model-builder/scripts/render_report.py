@@ -490,6 +490,54 @@ def backend_detail_sections(backends: dict[str, Any]) -> str:
     return "".join(sections) or "<p>No backend-specific details were recorded.</p>"
 
 
+def ablation_study_section(analyses: dict[str, Any], approval: dict[str, Any]) -> str:
+    """Render optional development-only feature-group ablation evidence."""
+    ablations = analyses.get("ablations") or []
+    if not isinstance(ablations, list) or not ablations:
+        return (
+            '<p class="muted">No optional ablation studies were approved for '
+            "this experiment.</p>"
+        )
+    plan = ((approval.get("analyses") or {}).get("ablations") or {})
+    planned_groups = plan.get("feature_groups") or []
+    hypotheses = {
+        group.get("id"): group.get("hypothesis")
+        for group in planned_groups
+        if isinstance(group, dict)
+    }
+    rows: list[str] = []
+    for ablation in ablations:
+        if not isinstance(ablation, dict):
+            continue
+        development = ablation.get("development_evaluation") or {}
+        group_id = ablation.get("approved_group_id")
+        rows.append(
+            "<tr>"
+            f"<td>{esc(group_id)}</td>"
+            f"<td>{esc(hypotheses.get(group_id))}</td>"
+            f"<td>{esc(ablation.get('backend'))}</td>"
+            f"<td>{badge(ablation.get('status'))}</td>"
+            f"<td>{fmt_number(development.get('reference_score'))}</td>"
+            f"<td>{fmt_number(development.get('ablated_score'))}</td>"
+            f"<td>{fmt_number(development.get('delta'))}</td>"
+            f"<td>{esc(ablation.get('conclusion'))}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return '<p class="muted">No readable ablation evidence was recorded.</p>'
+    return (
+        '<p class="muted">Each completed study retrains the full pipeline on '
+        "development evidence only; it is not a sealed-final evaluation.</p>"
+        '<div class="table-wrap"><table><thead><tr>'
+        "<th>Feature group removed</th><th>Hypothesis</th><th>Backend</th><th>Status</th>"
+        "<th>Reference score</th><th>Ablated score</th><th>Delta</th>"
+        "<th>Conclusion</th>"
+        "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table></div>"
+    )
+
+
 def render(run: dict[str, Any], results_markdown: str) -> str:
     problem = run.get("problem") or {}
     feature_contract = problem.get("feature_contract") or {}
@@ -499,6 +547,7 @@ def render(run: dict[str, Any], results_markdown: str) -> str:
     primary_metric = evaluation.get("primary_metric") or {}
     approval = run.get("approval") or {}
     backends = run.get("backends") or {}
+    analyses = run.get("analyses") or {}
     selection = run.get("selection") or {}
     inference = run.get("inference") or {}
     lineage = run.get("lineage") or {}
@@ -665,6 +714,11 @@ footer {{ margin-top: 20px; text-align: center; font-size: 12px; }}
             ]
         )
     }</dl>
+</section>
+
+<section>
+  <h2>Ablation studies</h2>
+  {ablation_study_section(analyses, approval)}
 </section>
 
 <section>

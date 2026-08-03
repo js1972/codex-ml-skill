@@ -40,6 +40,9 @@ Analyze the source dataset without changing it or preparing a modeling run.
 ## Boundaries
 
 - Treat target analysis as descriptive only. Do not choose metrics, splits, features, or candidate models.
+- Do not perform model ablations. You may identify feature/source groups that
+  merit a later ablation, but only `ml-model-builder` may test their effect on
+  model performance after an approved modeling plan.
 - Report possible identifiers, pipeline metadata, high cardinality, repeated
   observations, missingness, imbalance, outliers, and suspicious target copies as
   observations requiring domain review, not automatic deletion instructions.

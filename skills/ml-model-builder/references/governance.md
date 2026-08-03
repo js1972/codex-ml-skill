@@ -47,6 +47,7 @@ Present:
 | Classical | Include/decline, families, Optuna/search and compute budget |
 | AutoGluon | Include/decline, preset, runtime estimate, run-to-completion or time-limited mode, optional time limit and resource budget |
 | SAP RPT | Include/decline, accessible model IDs/access route, full-context or truncation plan, context sizes, retrieval strategies/readiness, input format/seed, request budget, named destination and transferred data scope |
+| Ablation | When requested or material to a feature/source decision: include/decline, feature groups and hypotheses, full-pipeline retraining budget, and development-only evidence boundary |
 | Selection | Operational constraints used alongside predictive quality |
 
 Recommend a concrete choice for each track. Require an explicit response that
@@ -80,6 +81,11 @@ current values. Record each track's selection/status/budget, the approved RPT
 configuration plan when selected, and the approval time in `approval`.
 Initialize `approval.amendments` and
 `approval.remote_transfers` as lists, even when empty.
+
+When an ablation is selected, record its approved groups, hypotheses, maximum
+variants, and incremental wall-time budget in `approval.analyses`. Do not add an
+ablation after the approval gate merely because a feature-importance result is
+interesting; obtain an amendment first if it was not foreseeable.
 
 For each later approved plan change, add one amendment with a unique ID,
 approval timestamp, reason, and a non-empty list of structured

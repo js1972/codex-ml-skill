@@ -65,6 +65,8 @@ experiment plan for explicit approval:
 - target/label meaning, prediction moment, intended use, and prohibited uses;
 - eligible/excluded features;
 - evaluation rows, splits, primary metric, and uncertainty;
+- optional ablation plan for material feature/source decisions: approved groups,
+  hypotheses, full-pipeline retraining budget, and development-only evidence;
 - per-track CPU, memory, parallel-job, and GPU controls;
 - classical candidate families, minimum coverage, time, and Optuna trials;
 - AutoGluon choice, preset, estimated runtime, run-to-completion or
@@ -242,6 +244,8 @@ The ML skill:
 - keeps final evidence outside selection;
 - fits classical preprocessing, target encoding, resampling, calibration, and
   feature selection within valid fold boundaries;
+- performs optional feature-group ablations only with approval, complete
+  retraining, paired development evidence, and no sealed-final exposure;
 - uses AutoGluon as an autonomous builder without external Optuna;
 - uses SAP RPT as a pretrained context/query model without training artifacts;
 - reports uncertainty, practical value, error/subgroup slices, and
